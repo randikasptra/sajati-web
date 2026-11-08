@@ -15,8 +15,8 @@ Buka `http://localhost:3000`. Untuk mengembalikan data demo ke kondisi awal, gun
 
 ## Alur demo
 
-1. Warga memilih setor langsung atau meminta penjemputan, lalu memantau status, riwayat, saldo, katalog kebutuhan pokok, dan pengaduan.
-2. Petugas desa menjadwalkan permintaan, mencatat penimbangan aktual, memverifikasi atau menolak setoran, serta mengirim stok ke kecamatan.
+1. Warga memilih setor langsung di desa atau mendaftar ke jadwal setor keliling berdasarkan rute dan titik kumpul wilayah. Petugas tidak menerima permintaan jemput ke rumah.
+2. Petugas desa mencari akun warga, memasukkan berat hasil timbang, dan memverifikasi setoran. Setelah disetujui, material masuk ke stok desa; petugas lalu memilah stok sebagai dapat atau tidak dapat dikelola sebelum menyalurkannya.
 3. Admin desa menyetujui nilai setoran. Saldo hanya bertambah jika dana desa cukup dan kapasitas penampungan tidak terlampaui.
 4. Kecamatan menerima transfer desa, mengonsolidasikan stok, dan menyalurkan dana ke desa. BUMD menerima transfer kecamatan, menyalurkan dana ke kecamatan, dan menawarkan material ke marketplace.
 5. Mitra memesan material, mengonfirmasi penerimaan, lalu mencatat produk, residu, dan kehilangan proses. Input harus sama dengan jumlah keluar.

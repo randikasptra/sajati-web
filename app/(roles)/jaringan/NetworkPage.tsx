@@ -38,7 +38,17 @@ export function NetworkPage({ role }: { role: ActiveRole }) {
 }
 
 export function VillageStockPanel() {
-  return <div className="space-y-4"><div><h2 className="text-2xl font-bold">Stok dan penyaluran desa</h2><p className="text-muted-foreground">Material yang tidak dapat ditampung atau disalurkan di desa dapat dikirim ke konsolidasi kecamatan.</p></div><StockSummary level="desa" /><OutgoingTransfer level="desa" id="desa-sukamanah" name="Desa Sukamanah" destination={{ level: "kecamatan", id: "kec-singaparna", name: "Kecamatan Singaparna" }} /></div>;
+  return <div className="space-y-4"><div><h2 className="text-2xl font-bold">Stok dan pemilahan desa</h2><p className="text-muted-foreground">Setoran masuk sebagai stok setelah disetujui. Pilah material dari daftar stok ini sebelum memilih jalur pengelolaannya.</p></div><StockSortingPanel /><StockSummary level="desa" /><OutgoingTransfer level="desa" id="desa-sukamanah" name="Desa Sukamanah" destination={{ level: "kecamatan", id: "kec-singaparna", name: "Kecamatan Singaparna" }} /></div>;
+}
+
+function StockSortingPanel() {
+  const { stok, updateStok } = useStok();
+  const villageRows = stok.filter((row) => row.jenjang === "desa" && row.pemilikId === "desa-sukamanah");
+  const classify = (id: string, klasifikasi: "dikelola" | "tidak_dikelola") => updateStok(stok.map((row) => row.id === id ? { ...row, klasifikasi, diperbaruiPada: new Date().toISOString() } : row));
+  return <Card><CardHeader><CardTitle>Pilah stok yang sudah masuk</CardTitle><CardDescription>Pemilahan dilakukan terhadap stok tercatat. Material yang tidak dapat dikelola tetap tersimpan sebagai catatan, tetapi tidak dapat dikirim ke jalur daur ulang.</CardDescription></CardHeader><CardContent className="space-y-2">{villageRows.length === 0 ? <p className="text-sm text-muted-foreground">Belum ada stok desa untuk dipilah.</p> : villageRows.map((row) => {
+    const status = row.klasifikasi ?? "belum_dipilah";
+    return <div key={row.id} className="flex flex-col gap-3 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold">{HARGA_SAMPAH[row.kategori].label} · {row.beratKg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg</p><p className="text-xs text-muted-foreground">Kualitas {row.kualitas} · {status === "belum_dipilah" ? "Belum dipilah" : status === "dikelola" ? "Dapat dikelola" : "Tidak dapat dikelola"}</p></div><div className="flex gap-2"><Button size="sm" variant={status === "dikelola" ? "default" : "outline"} onClick={() => classify(row.id, "dikelola")}>Dapat dikelola</Button><Button size="sm" variant={status === "tidak_dikelola" ? "destructive" : "outline"} onClick={() => classify(row.id, "tidak_dikelola")}>Tidak dapat dikelola</Button></div></div>;
+  })}</CardContent></Card>;
 }
 
 function Metric({ label, value, detail }: { label: string; value: string | number; detail?: string }) {
@@ -54,19 +64,25 @@ function StockSummary({ level }: { level?: JenjangPemilik }) {
   const { stok } = useStok();
   const rows = useMemo(() => {
     const filtered = level ? stok.filter((row) => row.jenjang === level) : stok;
-    return CATEGORY_KEYS.map((kategori) => ({
-      kategori,
-      kg: filtered.filter((row) => row.kategori === kategori).reduce((sum, row) => sum + row.beratKg, 0),
-    })).filter((row) => row.kg > 0);
+    return CATEGORY_KEYS.map((kategori) => {
+      const items = filtered.filter((row) => row.kategori === kategori);
+      return {
+        kategori,
+        kg: items.reduce((sum, row) => sum + row.beratKg, 0),
+        manageable: items.filter((row) => (row.klasifikasi ?? (row.jenjang === "desa" ? "belum_dipilah" : "dikelola")) === "dikelola").reduce((sum, row) => sum + row.beratKg, 0),
+        pending: items.filter((row) => (row.klasifikasi ?? (row.jenjang === "desa" ? "belum_dipilah" : "dikelola")) === "belum_dipilah").reduce((sum, row) => sum + row.beratKg, 0),
+        rejected: items.filter((row) => row.klasifikasi === "tidak_dikelola").reduce((sum, row) => sum + row.beratKg, 0),
+      };
+    }).filter((row) => row.kg > 0);
   }, [level, stok]);
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader><CardTitle>Stok material tersedia</CardTitle><CardDescription>Stok tersimpan dan sudah tercatat di lokasi pengelola.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Stok material tercatat</CardTitle><CardDescription>Ringkasan seluruh stok, termasuk yang belum dipilah dan yang tidak dapat dikelola.</CardDescription></CardHeader>
         <CardContent className="space-y-2">
           {rows.length === 0 ? <p className="text-sm text-muted-foreground">Belum ada stok.</p> : rows.map((row) => (
             <div key={row.kategori} className="flex items-center justify-between rounded-lg border p-3 text-sm">
-              <span>{HARGA_SAMPAH[row.kategori].label}</span><strong className="tabular-nums">{row.kg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg</strong>
+              <div><span className="font-medium">{HARGA_SAMPAH[row.kategori].label}</span><p className="text-xs text-muted-foreground">{row.manageable.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg dikelola · {row.pending.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg belum dipilah · {row.rejected.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg tidak dikelola</p></div><strong className="tabular-nums">{row.kg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg</strong>
             </div>
           ))}
         </CardContent>
@@ -114,7 +130,7 @@ function IncomingTransfers({ level, id, name }: { level: JenjangPemilik; id: str
         setMessage(`Kapasitas ${name} terlampaui. Tolak transfer agar material dapat diarahkan ke jenjang berikutnya.`);
         return;
       }
-      const source = stok.find((row) => row.jenjang === item.asalJenjang && row.pemilikId === item.asalId && row.kategori === item.kategori);
+      const source = stok.find((row) => row.jenjang === item.asalJenjang && row.pemilikId === item.asalId && row.kategori === item.kategori && (row.klasifikasi ?? (row.jenjang === "desa" ? "belum_dipilah" : "dikelola")) === "dikelola");
       if (!item.reserved && (!source || source.beratKg + 0.001 < item.beratKg)) {
         setMessage("Stok asal tidak cukup; transfer tidak dapat diterima.");
         return;
@@ -126,14 +142,14 @@ function IncomingTransfers({ level, id, name }: { level: JenjangPemilik; id: str
       if (destination) {
         next.push({ ...destination, beratKg: destination.beratKg + item.beratKg, diperbaruiPada: new Date().toISOString() });
       } else {
-        next.push({ id: generateId("st"), jenjang: level, pemilikId: id, namaPemilik: name, kategori: item.kategori, beratKg: item.beratKg, kualitas: source?.kualitas ?? item.kualitas ?? "sedang", diperbaruiPada: new Date().toISOString() });
+        next.push({ id: generateId("st"), jenjang: level, pemilikId: id, namaPemilik: name, kategori: item.kategori, beratKg: item.beratKg, kualitas: source?.kualitas ?? item.kualitas ?? "sedang", klasifikasi: "dikelola", diperbaruiPada: new Date().toISOString() });
       }
       updateStok(next);
     } else {
       const source = stok.find((row) => row.jenjang === item.asalJenjang && row.pemilikId === item.asalId && row.kategori === item.kategori);
       if (item.reserved) {
         if (source) updateStok(stok.map((row) => row.id === source.id ? { ...row, beratKg: row.beratKg + item.beratKg, diperbaruiPada: new Date().toISOString() } : row));
-        else updateStok([...stok, { id: generateId("st"), jenjang: item.asalJenjang, pemilikId: item.asalId, namaPemilik: item.asalNama, kategori: item.kategori, beratKg: item.beratKg, kualitas: item.kualitas ?? "sedang", diperbaruiPada: new Date().toISOString() }]);
+        else updateStok([...stok, { id: generateId("st"), jenjang: item.asalJenjang, pemilikId: item.asalId, namaPemilik: item.asalNama, kategori: item.kategori, beratKg: item.beratKg, kualitas: item.kualitas ?? "sedang", klasifikasi: "dikelola", diperbaruiPada: new Date().toISOString() }]);
       }
     }
     updateTransferById(item.id, { status: accepted ? "diterima" : "ditolak", diterimaPada: accepted ? new Date().toISOString() : undefined });
@@ -159,11 +175,13 @@ function IncomingTransfers({ level, id, name }: { level: JenjangPemilik; id: str
 function OutgoingTransfer({ level, id, name, destination }: { level: JenjangPemilik; id: string; name: string; destination: { level: JenjangPemilik; id: string; name: string } }) {
   const { stok, updateStok } = useStok();
   const { addTransfer } = useTransfer();
-  const eligible = stok.filter((row) => row.jenjang === level && row.pemilikId === id && row.beratKg > 0);
+  const eligible = stok.filter((row) => row.jenjang === level && row.pemilikId === id && row.beratKg > 0 && (row.klasifikasi ?? (row.jenjang === "desa" ? "belum_dipilah" : "dikelola")) === "dikelola");
   const [stockId, setStockId] = useState(eligible[0]?.id ?? "");
   const [weight, setWeight] = useState("");
   const [message, setMessage] = useState("");
-  const selected = eligible.find((row) => row.id === stockId);
+  const selected = eligible.find((row) => row.id === stockId) ?? eligible[0];
+  const requestedWeight = Number(weight);
+  const canSubmit = !!selected && Number.isFinite(requestedWeight) && requestedWeight > 0 && requestedWeight <= selected.beratKg;
 
   const submit = () => {
     const kg = Number(weight);
@@ -181,9 +199,12 @@ function OutgoingTransfer({ level, id, name, destination }: { level: JenjangPemi
     <Card>
       <CardHeader><CardTitle>Kirim material ke {destination.name}</CardTitle><CardDescription>Stok dikunci saat dikirim dan dipulihkan bila tujuan menolak.</CardDescription></CardHeader>
       <CardContent className="space-y-3">
-        <label className="block space-y-1 text-sm"><span>Jenis material</span><select value={stockId} onChange={(event) => setStockId(event.target.value)} className="h-9 w-full rounded-md border bg-background px-3">{eligible.map((row) => <option key={row.id} value={row.id}>{HARGA_SAMPAH[row.kategori].label} — tersedia {row.beratKg} kg</option>)}</select></label>
-        <label className="block space-y-1 text-sm"><span>Berat (kg)</span><input type="number" min="0.1" step="0.1" max={selected?.beratKg} value={weight} onChange={(event) => setWeight(event.target.value)} className="h-9 w-full rounded-md border bg-background px-3" /></label>
-        <Button onClick={submit} disabled={!selected}>Buat transfer</Button>
+        {eligible.length === 0 && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Belum ada stok yang ditandai dapat dikelola. Pilah stok desa terlebih dahulu sebelum membuat transfer.</p>}
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px_auto] md:items-end">
+          <label className="block min-w-0 space-y-1 text-sm"><span>Stok yang dapat dikelola</span><select value={selected?.id ?? ""} onChange={(event) => { setStockId(event.target.value); setWeight(""); setMessage(""); }} disabled={eligible.length === 0} className="h-10 w-full rounded-md border bg-background px-3 disabled:opacity-60">{eligible.map((row) => <option key={row.id} value={row.id}>{HARGA_SAMPAH[row.kategori].label} ? tersedia {row.beratKg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg</option>)}</select></label>
+          <label className="block space-y-1 text-sm"><span>Berat transfer (kg)</span><input type="number" min="0.1" step="0.1" max={selected?.beratKg} value={weight} onChange={(event) => { setWeight(event.target.value); setMessage(""); }} placeholder={selected ? `Maks. ${selected.beratKg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg` : "Pilah stok terlebih dahulu"} disabled={!selected} className="h-10 w-full rounded-md border bg-background px-3 disabled:opacity-60" /><span className="block text-[11px] text-muted-foreground">Jumlah tidak boleh melebihi stok terpilih.</span></label>
+          <Button onClick={submit} disabled={!canSubmit} className="md:mb-[1.35rem]">Buat transfer</Button>
+        </div>
         {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
       </CardContent>
     </Card>
@@ -222,7 +243,7 @@ function MarketplacePanel({ level, ownerId, ownerName }: { level: JenjangPemilik
   const [weight, setWeight] = useState("");
   const [price, setPrice] = useState("");
   const [message, setMessage] = useState("");
-  const available = stok.filter((row) => row.jenjang === level && row.pemilikId === ownerId);
+  const available = stok.filter((row) => row.jenjang === level && row.pemilikId === ownerId && (row.klasifikasi ?? (row.jenjang === "desa" ? "belum_dipilah" : "dikelola")) === "dikelola");
   const selected = available.find((row) => row.id === stockId) ?? available[0];
   const myListings = listings.filter((item) => item.pemilikId === ownerId);
 

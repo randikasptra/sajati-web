@@ -175,6 +175,7 @@ function AdminPersetujuan({ perluPersetujuan }: { perluPersetujuan: Setoran[] })
         kategori: item.kategori,
         beratKg: item.berat,
         kualitas: item.kualitas,
+        klasifikasi: "belum_dipilah" as const,
         diperbaruiPada: now,
       })),
     ]);

@@ -34,11 +34,11 @@ export interface Penjemputan {
   id: string;
   wargaId: string;
   tanggalJemput: string;
-  metode: "antar" | "jemput";
+  metode: "antar" | "keliling";
   alamat: string;
   catatan?: string;
   kategori: KategoriSampah[];
-  status: "diajukan" | "dijadwalkan" | "dijemput" | "selesai" | "dibatalkan";
+  status: "diajukan" | "dijadwalkan" | "diterima" | "dijemput" | "selesai" | "dibatalkan";
   createdAt: string;
 }
 
@@ -50,6 +50,7 @@ export interface StokMaterial {
   kategori: KategoriSampah;
   beratKg: number;
   kualitas: "baik" | "sedang" | "kurang";
+  klasifikasi?: "belum_dipilah" | "dikelola" | "tidak_dikelola";
   diperbaruiPada: string;
 }
 
@@ -289,7 +290,8 @@ export const MOCK_SETORAN: Setoran[] = [
         subtotal: 6000,
       },
     ],
-    status: "menunggu_verifikasi",
+    status: "terverifikasi",
+    petugasId: "p1",
     totalNilai: 6000,
     createdAt: "2026-10-28T09:15:00",
   },
@@ -461,10 +463,10 @@ export const MOCK_PENUKARAN: Penukaran[] = [
 export const MOCK_PENJEMPUTAN: Penjemputan[] = [
   {
     id: "jm1",
-    wargaId: "w2",
+    wargaId: "w1",
     tanggalJemput: "2026-11-06",
-    metode: "jemput",
-    alamat: "RT 01/RW 03, Desa Sukamanah",
+    metode: "keliling",
+    alamat: "Rute Sukamanah Barat · Lapang Desa · 08.00–10.00",
     kategori: ["plastik", "kertas"],
     status: "diajukan",
     createdAt: "2026-11-02T08:00:00",
@@ -472,11 +474,11 @@ export const MOCK_PENJEMPUTAN: Penjemputan[] = [
 ];
 
 export const MOCK_STOK: StokMaterial[] = [
-  { id: "st1", jenjang: "desa", pemilikId: "desa-sukamanah", namaPemilik: "Desa Sukamanah", kategori: "plastik", beratKg: 57.5, kualitas: "baik", diperbaruiPada: "2026-11-02T08:00:00" },
-  { id: "st2", jenjang: "desa", pemilikId: "desa-sukamanah", namaPemilik: "Desa Sukamanah", kategori: "kertas", beratKg: 46, kualitas: "sedang", diperbaruiPada: "2026-11-02T08:00:00" },
-  { id: "st3", jenjang: "kecamatan", pemilikId: "kec-singaparna", namaPemilik: "Kecamatan Singaparna", kategori: "plastik", beratKg: 95, kualitas: "baik", diperbaruiPada: "2026-11-02T08:00:00" },
-  { id: "st4", jenjang: "kecamatan", pemilikId: "kec-singaparna", namaPemilik: "Kecamatan Singaparna", kategori: "organik", beratKg: 55, kualitas: "sedang", diperbaruiPada: "2026-11-02T08:00:00" },
-  { id: "st5", jenjang: "kabupaten", pemilikId: "bumd-tasikmalaya", namaPemilik: "BUMD Kabupaten", kategori: "plastik", beratKg: 180, kualitas: "sedang", diperbaruiPada: "2026-11-02T08:00:00" },
+  { id: "st1", jenjang: "desa", pemilikId: "desa-sukamanah", namaPemilik: "Desa Sukamanah", kategori: "plastik", beratKg: 57.5, kualitas: "baik", klasifikasi: "belum_dipilah", diperbaruiPada: "2026-11-02T08:00:00" },
+  { id: "st2", jenjang: "desa", pemilikId: "desa-sukamanah", namaPemilik: "Desa Sukamanah", kategori: "kertas", beratKg: 46, kualitas: "sedang", klasifikasi: "belum_dipilah", diperbaruiPada: "2026-11-02T08:00:00" },
+  { id: "st3", jenjang: "kecamatan", pemilikId: "kec-singaparna", namaPemilik: "Kecamatan Singaparna", kategori: "plastik", beratKg: 95, kualitas: "baik", klasifikasi: "dikelola", diperbaruiPada: "2026-11-02T08:00:00" },
+  { id: "st4", jenjang: "kecamatan", pemilikId: "kec-singaparna", namaPemilik: "Kecamatan Singaparna", kategori: "organik", beratKg: 55, kualitas: "sedang", klasifikasi: "dikelola", diperbaruiPada: "2026-11-02T08:00:00" },
+  { id: "st5", jenjang: "kabupaten", pemilikId: "bumd-tasikmalaya", namaPemilik: "BUMD Kabupaten", kategori: "plastik", beratKg: 180, kualitas: "sedang", klasifikasi: "dikelola", diperbaruiPada: "2026-11-02T08:00:00" },
 ];
 
 export const MOCK_TRANSFER: TransferMaterial[] = [

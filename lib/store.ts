@@ -59,7 +59,26 @@ function loadFromStorage<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
   try {
     const raw = localStorage.getItem(key);
-    if (raw) return JSON.parse(raw) as T;
+    if (raw) {
+      const stored = JSON.parse(raw) as T;
+      // The original demo seed included a pre-filled pending-weight row. Treat
+      // that sample as already weighed and verified so new warga requests never
+      // appear to receive a weight before the village weighing step.
+      if (key === STORAGE_KEYS.setoran && Array.isArray(stored)) {
+        for (const record of stored as Setoran[]) {
+          if (record.id === "s2" && record.status === "menunggu_verifikasi") {
+            record.status = "terverifikasi";
+            record.petugasId = "p1";
+          }
+        }
+      }
+      if (key === STORAGE_KEYS.stok && Array.isArray(stored)) {
+        for (const stock of stored as StokMaterial[]) {
+          if (!stock.klasifikasi) stock.klasifikasi = stock.jenjang === "desa" ? "belum_dipilah" : "dikelola";
+        }
+      }
+      return stored;
+    }
   } catch {
     // localStorage might be blocked or corrupt
   }

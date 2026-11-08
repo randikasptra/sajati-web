@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useSyncExternalStore } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
@@ -33,6 +33,8 @@ import {
   Plus,
   Trash2,
   AlertTriangle,
+  Search,
+  X,
 } from "lucide-react";
 import {
   HARGA_SAMPAH,
@@ -46,6 +48,14 @@ import { usePenjemputan } from "@/lib/store";
 import type { Penjemputan } from "@/data/mock";
 import { VillageStockPanel } from "@/app/(roles)/jaringan/NetworkPage";
 
+function getRecordPickupId() {
+  return sessionStorage.getItem("sajati_record_pickup");
+}
+function subscribeRecordPickup(callback: () => void) {
+  window.addEventListener("sajati_record_pickup_change", callback);
+  return () => window.removeEventListener("sajati_record_pickup_change", callback);
+}
+
 export function PetugasPage({
   activeNav,
   onNavChange,
@@ -53,11 +63,14 @@ export function PetugasPage({
   activeNav: string;
   onNavChange: (href: string) => void;
 }) {
-  const tab = activeNav === "/catat" ? "catat" : activeNav === "/penjemputan" ? "jemput" : activeNav === "/stok" ? "stok" : "antrian";
+  const tab = activeNav === "/petugas/catat" || activeNav === "/petugas/pilah" ? "catat" : activeNav === "/petugas/rute-keliling" ? "jemput" : activeNav === "/petugas/stok" ? "stok" : "antrian";
   const { setoran, addSetoran, updateSetoranById } = useSetoran();
   const { wargaList } = useWarga();
   const { penjemputan, updatePenjemputanById } = usePenjemputan();
-  const [recordPickup, setRecordPickup] = useState<Penjemputan | null>(null);
+  const recordPickupId = useSyncExternalStore(subscribeRecordPickup, getRecordPickupId, () => null);
+  const recordPickup = penjemputan.find((item) => item.id === recordPickupId) ?? null;
+  const isDashboard = activeNav === "/petugas" || activeNav === "/";
+  const pageTitle = isDashboard ? "Ringkasan Petugas" : tab === "antrian" ? "Antrian Verifikasi" : tab === "jemput" ? "Rute Setor Keliling" : tab === "stok" ? "Stok & Pilah Desa" : "Catat Setoran";
 
   const menunggu = useMemo(
     () => setoran.filter((s) => s.status === "menunggu_verifikasi"),
@@ -81,12 +94,12 @@ export function PetugasPage({
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold tracking-tight">Petugas Desa</h2>
-        <p className="text-muted-foreground">Verifikasi setoran dan pencatatan sampah masuk</p>
+        <h2 className="text-2xl font-bold tracking-tight">{pageTitle}</h2>
+        <p className="text-muted-foreground">{tab === "jemput" ? "Kelola warga yang terdaftar pada rute dan titik kumpul wilayah." : tab === "stok" ? "Pilah stok yang sudah tercatat sebagai dapat atau tidak dapat dikelola." : tab === "catat" ? "Catat berat dan kualitas sampah yang sudah diterima." : "Verifikasi setoran warga dan pantau sampah masuk."}</p>
       </div>
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-4">
+      {isDashboard && <div className="grid gap-4 sm:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Antrian</CardTitle>
@@ -127,23 +140,9 @@ export function PetugasPage({
             <p className="text-xs text-muted-foreground">total berat masuk</p>
           </CardContent>
         </Card>
-      </div>
+      </div>}
 
-      <Tabs value={tab} onValueChange={(value) => onNavChange(value === "catat" ? "/catat" : value === "jemput" ? "/penjemputan" : value === "stok" ? "/stok" : "/verifikasi")} className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="antrian">
-            Antrian Verifikasi
-            {menunggu.length > 0 && (
-              <Badge variant="destructive" className="ml-2 text-[10px] px-1.5 py-0 h-5">
-                {menunggu.length}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="jemput">Penjemputan ({penjemputan.filter((item) => item.status !== "selesai" && item.status !== "dibatalkan").length})</TabsTrigger>
-          <TabsTrigger value="stok">Stok desa</TabsTrigger>
-          <TabsTrigger value="catat">Catat Setoran Baru</TabsTrigger>
-        </TabsList>
-
+      <Tabs value={tab} className="space-y-4">
         <TabsContent value="antrian">
           <AntrianVerifikasi
             menunggu={menunggu}
@@ -162,8 +161,9 @@ export function PetugasPage({
             penjemputanId={recordPickup?.id}
             onCompleted={recordPickup ? () => {
               updatePenjemputanById(recordPickup.id, { status: "selesai" });
-              setRecordPickup(null);
-              onNavChange("/penjemputan");
+              sessionStorage.removeItem("sajati_record_pickup");
+              window.dispatchEvent(new Event("sajati_record_pickup_change"));
+              onNavChange("/petugas/rute-keliling");
             } : undefined}
           />
         </TabsContent>
@@ -172,7 +172,11 @@ export function PetugasPage({
             penjemputan={penjemputan}
             wargaList={wargaList}
             onStatus={(id, status) => updatePenjemputanById(id, { status })}
-            onRecord={(item) => { setRecordPickup(item); onNavChange("/catat"); }}
+            onRecord={(item) => {
+              sessionStorage.setItem("sajati_record_pickup", item.id);
+              window.dispatchEvent(new Event("sajati_record_pickup_change"));
+              onNavChange("/petugas/catat");
+            }}
           />
         </TabsContent>
         <TabsContent value="stok"><VillageStockPanel /></TabsContent>
@@ -194,10 +198,12 @@ function AntrianPenjemputan({
   onRecord: (item: Penjemputan) => void;
 }) {
   const active = penjemputan.filter((item) => item.status !== "selesai" && item.status !== "dibatalkan");
-  if (active.length === 0) return <Card><CardContent className="py-10 text-center text-sm text-muted-foreground">Tidak ada permintaan setor atau jemput aktif.</CardContent></Card>;
-  return <Card><CardHeader><CardTitle className="text-base">Jadwal setor dan penjemputan</CardTitle><CardDescription>Setelah material diterima, catat hasil timbang agar setoran terhubung dengan permintaan warga.</CardDescription></CardHeader><CardContent className="space-y-3">{active.map((item) => {
+  if (active.length === 0) return <Card><CardContent className="py-10 text-center text-sm text-muted-foreground">Belum ada warga terdaftar pada jadwal setor keliling.</CardContent></Card>;
+  return <Card><CardHeader><CardTitle className="text-base">Jadwal setor langsung dan rute keliling</CardTitle><CardDescription>Warga memilih rute dan titik kumpul. Setelah sampah diterima di titik layanan, catat hasil timbang.</CardDescription></CardHeader><CardContent className="space-y-3">{active.map((item) => {
     const warga = wargaList.find((person) => person.id === item.wargaId);
-    return <div key={item.id} className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"><div className="text-sm"><p className="font-medium">{warga?.nama ?? "Warga"} · {item.metode === "jemput" ? "Minta dijemput" : "Antar ke desa"}</p><p className="text-muted-foreground">{item.alamat} · {formatTanggalPendek(item.tanggalJemput)}</p><p className="text-xs text-muted-foreground">Jenis: {item.kategori.map((type) => HARGA_SAMPAH[type].label).join(", ")} · Status: {item.status}</p></div><div className="flex flex-wrap gap-2">{item.status === "diajukan" && <Button size="sm" onClick={() => onStatus(item.id, "dijadwalkan")}>Konfirmasi jadwal</Button>}{item.status === "dijadwalkan" && <Button size="sm" onClick={() => onStatus(item.id, "dijemput")}>{item.metode === "jemput" ? "Konfirmasi dijemput" : "Konfirmasi diterima"}</Button>}{item.status === "dijemput" && <Button size="sm" onClick={() => onRecord(item)}>Catat hasil timbang</Button>}</div></div>;
+    const keliling = item.metode === "keliling" || (item.metode as string) === "jemput";
+    const received = item.status === "diterima" || item.status === "dijemput";
+    return <div key={item.id} className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"><div className="text-sm"><p className="font-medium">{warga?.nama ?? "Warga"} · {keliling ? "Setor keliling" : "Antar ke desa"}</p><p className="text-muted-foreground">{item.alamat} · {formatTanggalPendek(item.tanggalJemput)}</p><p className="text-xs text-muted-foreground">Jenis: {item.kategori.map((type) => HARGA_SAMPAH[type].label).join(", ")} · Status: {item.status}</p></div><div className="flex flex-wrap gap-2">{item.status === "diajukan" && <Button size="sm" onClick={() => onStatus(item.id, "dijadwalkan")}>Konfirmasi jadwal</Button>}{item.status === "dijadwalkan" && <Button size="sm" onClick={() => onStatus(item.id, "diterima")}>Konfirmasi setoran diterima</Button>}{received && <Button size="sm" onClick={() => onRecord(item)}>Catat hasil timbang</Button>}</div></div>;
   })}</CardContent></Card>;
 }
 
@@ -395,11 +401,17 @@ function CatatSetoran({
   onCompleted?: () => void;
 }) {
   const [wargaId, setWargaId] = useState(initialWargaId ?? "");
+  const [wargaSearch, setWargaSearch] = useState(() => wargaList.find((w) => w.id === initialWargaId)?.nama ?? "");
   const [items, setItems] = useState<SetoranItem[]>([]);
   const [kategori, setKategori] = useState<KategoriSampah>("plastik");
   const [berat, setBerat] = useState("");
   const [kualitas, setKualitas] = useState<"baik" | "sedang" | "kurang">("baik");
   const [successOpen, setSuccessOpen] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+  const selectedWarga = wargaList.find((w) => w.id === wargaId);
+  const matchingWarga = wargaSearch.trim().length < 2 || wargaId
+    ? []
+    : wargaList.filter((w) => `${w.nama} ${w.rt} ${w.rw} ${w.desa} ${w.kecamatan} ${w.telepon}`.toLowerCase().includes(wargaSearch.trim().toLowerCase())).slice(0, 6);
 
   const totalNilai = items.reduce((sum, item) => sum + item.subtotal, 0);
 
@@ -430,7 +442,9 @@ function CatatSetoran({
       createdAt: new Date().toISOString(),
     });
     setWargaId("");
+    setWargaSearch("");
     setItems([]);
+    setSuccessMessage("Berat hasil timbang tersimpan dan setoran masuk ke antrean verifikasi. Pemilahan kelayakan dilakukan dari stok desa setelah setoran disetujui.");
     setSuccessOpen(true);
     onCompleted?.();
   };
@@ -441,30 +455,26 @@ function CatatSetoran({
         {/* Form */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Pencatatan Setoran</CardTitle>
-            <CardDescription>Pilih warga dan catat item sampah</CardDescription>
+            <CardTitle className="text-base">Pilah dan Timbang Setoran</CardTitle>
+            <CardDescription>Berat baru dicatat setelah sampah ditimbang petugas di titik layanan desa atau rute keliling.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label>Warga</Label>
-              <Select value={wargaId} onValueChange={(v) => setWargaId(v ?? "")}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Pilih warga" />
-                </SelectTrigger>
-                <SelectContent>
-                  {wargaList.map((w) => (
-                    <SelectItem key={w.id} value={w.id}>
-                      {w.nama} (RT {w.rt}/RW {w.rw})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="warga-search">Cari warga</Label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input id="warga-search" value={wargaSearch} onChange={(event) => { setWargaSearch(event.target.value); setWargaId(""); }} placeholder="Nama, RT/RW, desa, atau nomor HP" className="pl-9 pr-10" autoComplete="off" />
+                {wargaSearch && <button type="button" aria-label="Hapus pencarian warga" onClick={() => { setWargaSearch(""); setWargaId(""); }} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted"><X className="size-4" /></button>}
+              </div>
+              {selectedWarga && <p className="text-xs font-medium text-emerald-800">Dipilih: {selectedWarga.nama} · RT {selectedWarga.rt}/RW {selectedWarga.rw}, {selectedWarga.desa}</p>}
+              {matchingWarga.length > 0 && <div className="max-h-48 overflow-y-auto rounded-lg border bg-background p-1">{matchingWarga.map((w) => <button key={w.id} type="button" onClick={() => { setWargaId(w.id); setWargaSearch(w.nama); }} className="flex w-full flex-col rounded-md px-3 py-2 text-left hover:bg-muted"><span className="text-sm font-semibold">{w.nama}</span><span className="text-xs text-muted-foreground">RT {w.rt}/RW {w.rw} · Desa {w.desa} · {w.telepon}</span></button>)}</div>}
+              {!wargaId && wargaSearch.trim().length >= 2 && matchingWarga.length === 0 && <p className="text-xs text-muted-foreground">Warga tidak ditemukan. Coba nama atau nomor HP lain.</p>}
             </div>
 
             <Separator />
 
             <div className="space-y-3">
-              <Label>Tambah Item Sampah</Label>
+              <Label>Jenis sampah hasil timbang</Label>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Kategori</Label>
@@ -482,7 +492,7 @@ function CatatSetoran({
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Berat (kg)</Label>
+                  <Label className="text-xs text-muted-foreground">Hasil timbang (kg)</Label>
                   <Input
                     type="number"
                     step="0.1"
@@ -615,7 +625,7 @@ function CatatSetoran({
               Setoran Berhasil Dicatat
             </DialogTitle>
             <DialogDescription>
-              Setoran telah masuk ke antrian verifikasi. Anda dapat memverifikasinya di tab Antrian Verifikasi.
+              {successMessage}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
