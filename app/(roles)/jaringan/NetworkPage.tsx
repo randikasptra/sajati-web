@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ActiveRole } from "@/lib/store";
 import {
+  sortStock, createTransfer, processTransfer, publishListing, confirmPayment,
   useDana,
   useMarketplace,
   usePengolahan,
@@ -30,7 +31,15 @@ const SCOPE: Partial<Record<ActiveRole, { level: JenjangPemilik; id: string; nam
   bumd: { level: "kabupaten", id: "bumd-tasikmalaya", name: "BUMD Kabupaten" },
 };
 
-export function NetworkPage({ role }: { role: ActiveRole }) {
+export function NetworkPage({ role, activeNav }: { role: ActiveRole; activeNav: string }) {
+  const feature=activeNav.split("/")[2];
+  const scope=SCOPE[role];
+  if(feature === "wilayah") return <OperationalOverview />;
+  if(feature === "laporan") return <div className="space-y-4"><StockSummary /><TransferLog /><MarketLog /></div>;
+  if(scope && feature === "stok") return <div className="space-y-4"><StockSummary level={scope.level} /><StockSortingPanel level={scope.level} ownerId={scope.id} /></div>;
+  if(scope && feature === "transfer") return <div className="space-y-4"><IncomingTransfers level={scope.level} id={scope.id} name={scope.name} />{role === "kecamatan" && <OutgoingTransfer level={scope.level} id={scope.id} name={scope.name} destination={{level:"kabupaten",id:"bumd-tasikmalaya",name:"BUMD Kabupaten"}} />}<TransferLog /></div>;
+  if(feature === "dana" && scope) return <FundingPanel sourceId={role === "kecamatan" ? "dana-kecamatan" : "dana-kabupaten"} targetId={role === "kecamatan" ? "dana-desa" : "dana-kecamatan"} targetName={role === "kecamatan" ? "Desa Sukamanah" : "Kecamatan Singaparna"} />;
+  if(role === "bumd" && feature === "marketplace") return <MarketplacePanel level="kabupaten" ownerId="bumd-tasikmalaya" ownerName="BUMD Kabupaten" />;
   if (role === "kecamatan") return <KecamatanDashboard />;
   if (role === "bumd") return <BumdDashboard />;
   if (role === "mitra") return <MitraDashboard />;
@@ -38,17 +47,24 @@ export function NetworkPage({ role }: { role: ActiveRole }) {
 }
 
 export function VillageStockPanel() {
-  return <div className="space-y-4"><div><h2 className="text-2xl font-bold">Stok dan pemilahan desa</h2><p className="text-muted-foreground">Setoran masuk sebagai stok setelah disetujui. Pilah material dari daftar stok ini sebelum memilih jalur pengelolaannya.</p></div><StockSortingPanel /><StockSummary level="desa" /><OutgoingTransfer level="desa" id="desa-sukamanah" name="Desa Sukamanah" destination={{ level: "kecamatan", id: "kec-singaparna", name: "Kecamatan Singaparna" }} /></div>;
+  return <div className="space-y-4"><div><h2 className="text-2xl font-bold">Stok dan pemilahan desa</h2><p className="text-muted-foreground">Hasil timbang masuk stok fisik; stok dikunci sampai nilai disahkan. Pilah material dari daftar stok ini sebelum memilih jalur pengelolaannya.</p></div><StockSortingPanel /><StockSummary level="desa" /><OutgoingTransfer level="desa" id="desa-sukamanah" name="Desa Sukamanah" destination={{ level: "kecamatan", id: "kec-singaparna", name: "Kecamatan Singaparna" }} /></div>;
 }
 
-function StockSortingPanel() {
-  const { stok, updateStok } = useStok();
-  const villageRows = stok.filter((row) => row.jenjang === "desa" && row.pemilikId === "desa-sukamanah");
-  const classify = (id: string, klasifikasi: "dikelola" | "tidak_dikelola") => updateStok(stok.map((row) => row.id === id ? { ...row, klasifikasi, diperbaruiPada: new Date().toISOString() } : row));
-  return <Card><CardHeader><CardTitle>Pilah stok yang sudah masuk</CardTitle><CardDescription>Pemilahan dilakukan terhadap stok tercatat. Material yang tidak dapat dikelola tetap tersimpan sebagai catatan, tetapi tidak dapat dikirim ke jalur daur ulang.</CardDescription></CardHeader><CardContent className="space-y-2">{villageRows.length === 0 ? <p className="text-sm text-muted-foreground">Belum ada stok desa untuk dipilah.</p> : villageRows.map((row) => {
-    const status = row.klasifikasi ?? "belum_dipilah";
-    return <div key={row.id} className="flex flex-col gap-3 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold">{HARGA_SAMPAH[row.kategori].label} · {row.beratKg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg</p><p className="text-xs text-muted-foreground">Kualitas {row.kualitas} · {status === "belum_dipilah" ? "Belum dipilah" : status === "dikelola" ? "Dapat dikelola" : "Tidak dapat dikelola"}</p></div><div className="flex gap-2"><Button size="sm" variant={status === "dikelola" ? "default" : "outline"} onClick={() => classify(row.id, "dikelola")}>Dapat dikelola</Button><Button size="sm" variant={status === "tidak_dikelola" ? "destructive" : "outline"} onClick={() => classify(row.id, "tidak_dikelola")}>Tidak dapat dikelola</Button></div></div>;
-  })}</CardContent></Card>;
+function StockSortingPanel({ level = "desa", ownerId = "desa-sukamanah" }: { level?: JenjangPemilik; ownerId?: string }) {
+  const { stok } = useStok();
+  const [selected, setSelected] = useState("");
+  const [weight, setWeight] = useState("");
+  const [classification, setClassification] = useState<"dikelola" | "tidak_dikelola" | "residu">("dikelola");
+  const [message, setMessage] = useState("");
+  const rows = stok.filter(r => r.jenjang === level && r.pemilikId === ownerId && r.beratKg > 0);
+  const labels = { belum_dipilah: "Belum dipilah", dikelola: "Dapat dikelola", tidak_dikelola: "Perlu pengelola lanjutan", residu: "Residu - menunggu penanganan akhir" };
+  const save = () => { try { sortStock(selected, Number(weight), classification); setSelected(""); setWeight(""); setMessage("Pemilahan tersimpan. Total berat tetap sama."); } catch(error) { setMessage((error as Error).message); } };
+  return <Card><CardHeader><CardTitle>Pilah stok tercatat</CardTitle><CardDescription>Pilah seluruh atau sebagian berat. Material untuk pengelola lanjutan dapat diteruskan; residu tetap tercatat untuk penanganan akhir.</CardDescription></CardHeader><CardContent className="space-y-3">
+    {rows.length === 0 && <p>Belum ada stok untuk dipilah.</p>}
+    {rows.map(row => <div key={row.id} className="rounded-xl border p-3"><div className="flex items-center justify-between gap-3"><div><p className="font-semibold">{HARGA_SAMPAH[row.kategori].label} - {row.beratKg.toLocaleString("id-ID")} kg</p><p className="text-xs text-muted-foreground">Kualitas {row.kualitas} - {row.terkunci ? "Menunggu verifikasi / pengesahan" : labels[row.klasifikasi ?? "belum_dipilah"]}</p></div><Button size="sm" disabled={row.terkunci} onClick={()=>{setSelected(row.id);setWeight(String(row.beratKg));}}>Pilah</Button></div>
+    {selected===row.id && <div className="mt-3 grid gap-2 sm:grid-cols-3"><label className="text-sm">Berat yang dipilah (kg)<input aria-label="Berat yang dipilah" className="h-10 w-full rounded border px-3" type="number" min="0.1" step="0.1" max={row.beratKg} value={weight} onChange={e=>setWeight(e.target.value)} /></label><label className="text-sm">Hasil pemilahan<select className="h-10 w-full rounded border px-3" value={classification} onChange={e=>setClassification(e.target.value as typeof classification)}><option value="dikelola">Dapat dikelola</option><option value="tidak_dikelola">Perlu pengelola lanjutan</option><option value="residu">Residu</option></select></label><Button className="self-end" onClick={save}>Simpan pemilahan</Button></div>}</div>)}
+    {message && <p role="status" className="text-sm">{message}</p>}
+  </CardContent></Card>;
 }
 
 function Metric({ label, value, detail }: { label: string; value: string | number; detail?: string }) {
@@ -71,6 +87,7 @@ function StockSummary({ level }: { level?: JenjangPemilik }) {
         kg: items.reduce((sum, row) => sum + row.beratKg, 0),
         manageable: items.filter((row) => (row.klasifikasi ?? (row.jenjang === "desa" ? "belum_dipilah" : "dikelola")) === "dikelola").reduce((sum, row) => sum + row.beratKg, 0),
         pending: items.filter((row) => (row.klasifikasi ?? (row.jenjang === "desa" ? "belum_dipilah" : "dikelola")) === "belum_dipilah").reduce((sum, row) => sum + row.beratKg, 0),
+        residue: items.filter(row=>row.klasifikasi === "residu").reduce((sum,row)=>sum+row.beratKg,0),
         rejected: items.filter((row) => row.klasifikasi === "tidak_dikelola").reduce((sum, row) => sum + row.beratKg, 0),
       };
     }).filter((row) => row.kg > 0);
@@ -82,7 +99,7 @@ function StockSummary({ level }: { level?: JenjangPemilik }) {
         <CardContent className="space-y-2">
           {rows.length === 0 ? <p className="text-sm text-muted-foreground">Belum ada stok.</p> : rows.map((row) => (
             <div key={row.kategori} className="flex items-center justify-between rounded-lg border p-3 text-sm">
-              <div><span className="font-medium">{HARGA_SAMPAH[row.kategori].label}</span><p className="text-xs text-muted-foreground">{row.manageable.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg dikelola · {row.pending.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg belum dipilah · {row.rejected.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg tidak dikelola</p></div><strong className="tabular-nums">{row.kg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg</strong>
+              <div><span className="font-medium">{HARGA_SAMPAH[row.kategori].label}</span><p className="text-xs text-muted-foreground">{row.manageable.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg dikelola · {row.pending.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg belum dipilah · {row.rejected.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg perlu pengelola lanjutan ? {row.residue.toLocaleString("id-ID")} kg residu</p></div><strong className="tabular-nums">{row.kg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg</strong>
             </div>
           ))}
         </CardContent>
@@ -101,81 +118,42 @@ function MassBalanceSummary() {
   const { transaksi } = useDana();
   const approvedWeight = setoran.filter((item) => item.status === "saldo_ditambahkan" || item.status === "selesai").reduce((sum, item) => sum + item.items.reduce((itemSum, line) => itemSum + line.berat, 0), 0);
   const stockWeight = stok.reduce((sum, item) => sum + item.beratKg, 0);
-  const transitWeight = transfer.filter((item) => item.status === "menunggu").reduce((sum, item) => sum + item.beratKg, 0);
+  const transitWeight = transfer.filter((item) => (item.status === "menunggu" || item.status === "dikirim") && item.reserved).reduce((sum, item) => sum + item.beratKg, 0);
   const activeWeight = listings.filter((item) => item.status === "aktif").reduce((sum, item) => sum + item.beratKg, 0);
   const orderedWeight = listings.filter((item) => item.status === "dipesan").reduce((sum, item) => sum + item.beratKg, 0);
   const soldWeight = listings.filter((item) => item.status === "terjual").reduce((sum, item) => sum + item.beratKg, 0);
   const processedWeight = pengolahan.reduce((sum, item) => sum + item.inputKg, 0);
   const outputWeight = pengolahan.reduce((sum, item) => sum + item.outputKg + item.residuKg + item.kehilanganKg, 0);
   const accounted = stockWeight + transitWeight + activeWeight + orderedWeight + Math.max(0, soldWeight - processedWeight) + outputWeight;
-  const expected = MOCK_STOK_AWAL_KG + approvedWeight;
+  const receivedPending = setoran.filter(s => s.stokTercatat && s.status !== "saldo_ditambahkan" && s.status !== "selesai").reduce((a,s)=>a+s.items.reduce((n,i)=>n+i.berat,0),0);
+  const transferLoss = transfer.filter(t=>t.status === "diterima").reduce((a,t)=>a+t.beratKg-(t.beratDiterima??t.beratKg),0);
+  const expected = MOCK_STOK_AWAL_KG + approvedWeight + receivedPending - transferLoss;
   const difference = expected - accounted;
-  return <div className="space-y-4"><Card><CardHeader><CardTitle>Neraca massa</CardTitle><CardDescription>Membandingkan stok awal dan setoran disetujui dengan stok, transfer, marketplace, serta hasil olah yang tercatat.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-3"><Metric label="Material terukur" value={`${accounted.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Material yang seharusnya tercatat" value={`${expected.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} detail={`Saldo awal demo ${MOCK_STOK_AWAL_KG.toLocaleString("id-ID")} kg + setoran disetujui ${approvedWeight.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Selisih pencatatan" value={`${difference.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} detail={Math.abs(difference) < 0.01 ? "Neraca demo seimbang" : "Periksa pencatatan stok, transfer, dan hasil olah"} /></CardContent></Card><FundingLog transaksi={transaksi} /></div>;
+  return <div className="space-y-4"><Card><CardHeader><CardTitle>Neraca massa</CardTitle><CardDescription>Membandingkan stok awal dan setoran disetujui dengan stok, transfer, marketplace, serta hasil olah yang tercatat.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-3"><Metric label="Material terukur" value={`${accounted.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Material yang seharusnya tercatat" value={`${expected.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} detail={`Stok awal ${MOCK_STOK_AWAL_KG.toLocaleString("id-ID")} kg + setoran disetujui ${approvedWeight.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg + stok menunggu ${receivedPending.toLocaleString("id-ID")} kg - selisih transfer ${transferLoss.toLocaleString("id-ID")} kg`} /><Metric label="Selisih pencatatan" value={`${difference.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} detail={Math.abs(difference) < 0.01 ? "Neraca seimbang" : "Periksa pencatatan stok, transfer, dan hasil olah"} /></CardContent></Card><FundingLog transaksi={transaksi} /></div>;
 }
 
 function FundingLog({ transaksi }: { transaksi: ReturnType<typeof useDana>["transaksi"] }) {
-  return <Card><CardHeader><CardTitle>Jejak dana insentif</CardTitle><CardDescription>Penyaluran dana dan saldo warga dicatat terpisah dari perpindahan sampah.</CardDescription></CardHeader><CardContent className="space-y-2">{transaksi.length === 0 ? <p className="text-sm text-muted-foreground">Belum ada transaksi dana.</p> : transaksi.map((item) => <div key={item.id} className="flex flex-col gap-1 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium">{item.sumberNama} → {item.tujuanNama}</p><p className="text-muted-foreground">{item.jenis === "penyaluran" ? "Penyaluran antar jenjang" : "Saldo insentif warga"} · {formatTanggalPendek(item.tanggal)}{item.referensi ? ` · Setoran ${item.referensi}` : ""}</p></div><strong className="tabular-nums">{formatRupiah(item.jumlah)}</strong></div>)}</CardContent></Card>;
+  return <Card><CardHeader><CardTitle>Jejak dana insentif</CardTitle><CardDescription>Penyaluran dana dan saldo warga dicatat terpisah dari perpindahan sampah.</CardDescription></CardHeader><CardContent className="space-y-2">{transaksi.length === 0 ? <p className="text-sm text-muted-foreground">Belum ada transaksi dana.</p> : transaksi.map((item) => <div key={item.id} className="flex flex-col gap-1 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium">{item.sumberNama} → {item.tujuanNama}</p><p className="text-muted-foreground">{item.jenis === "penyaluran" ? "Penyaluran antar jenjang" : item.jenis === "penjualan" ? "Pembayaran material" : "Saldo insentif warga"} · {formatTanggalPendek(item.tanggal)}{item.referensi ? ` · Setoran ${item.referensi}` : ""}</p></div><strong className="tabular-nums">{formatRupiah(item.jumlah)}</strong></div>)}</CardContent></Card>;
 }
 
-function IncomingTransfers({ level, id, name }: { level: JenjangPemilik; id: string; name: string }) {
-  const { transfer, updateTransferById } = useTransfer();
-  const { stok, updateStok } = useStok();
-  const [message, setMessage] = useState("");
-  const incoming = transfer.filter((item) => item.tujuanJenjang === level && item.tujuanId === id && item.status === "menunggu");
-
-  const receive = (item: TransferMaterial, accepted: boolean) => {
-    if (accepted) {
-      const destinationWeight = stok.filter((row) => row.jenjang === level && row.pemilikId === id).reduce((sum, row) => sum + row.beratKg, 0);
-      if (destinationWeight + item.beratKg > CAPACITY_KG[level]) {
-        setMessage(`Kapasitas ${name} terlampaui. Tolak transfer agar material dapat diarahkan ke jenjang berikutnya.`);
-        return;
-      }
-      const source = stok.find((row) => row.jenjang === item.asalJenjang && row.pemilikId === item.asalId && row.kategori === item.kategori && (row.klasifikasi ?? (row.jenjang === "desa" ? "belum_dipilah" : "dikelola")) === "dikelola");
-      if (!item.reserved && (!source || source.beratKg + 0.001 < item.beratKg)) {
-        setMessage("Stok asal tidak cukup; transfer tidak dapat diterima.");
-        return;
-      }
-      const remaining = source ? source.beratKg - (item.reserved ? 0 : item.beratKg) : 0;
-      const next = source ? stok.filter((row) => row.id !== source.id) : [...stok];
-      if (source && remaining > 0.001) next.push({ ...source, beratKg: remaining, diperbaruiPada: new Date().toISOString() });
-      const destination = stok.find((row) => row.jenjang === level && row.pemilikId === id && row.kategori === item.kategori);
-      if (destination) {
-        next.push({ ...destination, beratKg: destination.beratKg + item.beratKg, diperbaruiPada: new Date().toISOString() });
-      } else {
-        next.push({ id: generateId("st"), jenjang: level, pemilikId: id, namaPemilik: name, kategori: item.kategori, beratKg: item.beratKg, kualitas: source?.kualitas ?? item.kualitas ?? "sedang", klasifikasi: "dikelola", diperbaruiPada: new Date().toISOString() });
-      }
-      updateStok(next);
-    } else {
-      const source = stok.find((row) => row.jenjang === item.asalJenjang && row.pemilikId === item.asalId && row.kategori === item.kategori);
-      if (item.reserved) {
-        if (source) updateStok(stok.map((row) => row.id === source.id ? { ...row, beratKg: row.beratKg + item.beratKg, diperbaruiPada: new Date().toISOString() } : row));
-        else updateStok([...stok, { id: generateId("st"), jenjang: item.asalJenjang, pemilikId: item.asalId, namaPemilik: item.asalNama, kategori: item.kategori, beratKg: item.beratKg, kualitas: item.kualitas ?? "sedang", klasifikasi: "dikelola", diperbaruiPada: new Date().toISOString() }]);
-      }
-    }
-    updateTransferById(item.id, { status: accepted ? "diterima" : "ditolak", diterimaPada: accepted ? new Date().toISOString() : undefined });
-    setMessage(accepted ? "Material diterima dan masuk ke stok." : "Transfer ditolak dan stok dikembalikan ke asal.");
-  };
-
-  return (
-    <Card>
-      <CardHeader><CardTitle>Transfer masuk</CardTitle><CardDescription>Periksa berat dan catatan sebelum material dimasukkan ke stok.</CardDescription></CardHeader>
-      <CardContent className="space-y-3">
-        {message && <p role="status" className="rounded-md bg-primary/10 p-3 text-sm text-primary">{message}</p>}
-        {incoming.length === 0 ? <p className="text-sm text-muted-foreground">Tidak ada transfer yang menunggu.</p> : incoming.map((item) => (
-          <div key={item.id} className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm"><p className="font-medium">{item.asalNama} mengirim {HARGA_SAMPAH[item.kategori].label}</p><p className="text-muted-foreground">{item.beratKg} kg · {formatTanggalPendek(item.dibuatPada)}{item.catatan ? ` · ${item.catatan}` : ""}</p></div>
-            <div className="flex gap-2"><Button size="sm" onClick={() => receive(item, true)}>Terima</Button><Button size="sm" variant="outline" onClick={() => receive(item, false)}>Tolak</Button></div>
-          </div>
-        ))}
-      </CardContent>
-    </Card>
-  );
+function IncomingTransfers({ level, id }: { level: JenjangPemilik; id: string; name: string }) {
+  const { transfer } = useTransfer();
+  const [message,setMessage]=useState("");
+  const [weights,setWeights]=useState<Record<string,string>>({});
+  const [reasons,setReasons]=useState<Record<string,string>>({});
+  const incoming=transfer.filter(r=>r.tujuanJenjang===level && r.tujuanId===id && ["menunggu","dikirim"].includes(r.status));
+  const act=(item:TransferMaterial, action:"terima"|"tolak")=>{try{processTransfer(item.id,action,Number(weights[item.id]??item.beratKg),reasons[item.id]??"");setMessage(action==="terima"?"Penerimaan tercatat. Pilah material yang masuk.":"Penolakan tercatat; stok dipulihkan ke asal.");}catch(error){setMessage((error as Error).message);}};
+  return <Card><CardHeader><CardTitle>Transfer masuk</CardTitle><CardDescription>Catat hasil timbang penerimaan. Selisih dan penolakan harus disertai alasan.</CardDescription></CardHeader><CardContent className="space-y-3">
+    {!incoming.length && <p className="text-sm text-muted-foreground">Tidak ada transfer yang menunggu.</p>}
+    {incoming.map(item=><div key={item.id} className="space-y-3 rounded-xl border p-3"><p className="font-semibold">{item.asalNama} - {HARGA_SAMPAH[item.kategori].label} - {item.beratKg} kg</p><Badge>{item.status === "menunggu" ? "Menunggu keberangkatan" : "Dalam perjalanan"}</Badge><div className="grid gap-2 sm:grid-cols-2"><label className="text-sm">Berat diterima (kg)<input type="number" min="0.1" step="0.1" max={item.beratKg} className="h-10 w-full rounded border px-3" value={weights[item.id]??item.beratKg} onChange={e=>setWeights({...weights,[item.id]:e.target.value})}/></label><label className="text-sm">Alasan selisih / penolakan<input className="h-10 w-full rounded border px-3" value={reasons[item.id]??""} onChange={e=>setReasons({...reasons,[item.id]:e.target.value})}/></label></div><div className="flex gap-2"><Button disabled={item.status!=="dikirim"} onClick={()=>act(item,"terima")}>Terima material</Button><Button variant="outline" onClick={()=>act(item,"tolak")}>Tolak</Button></div></div>)}
+    {message && <p role="status">{message}</p>}
+  </CardContent></Card>;
 }
 
-function OutgoingTransfer({ level, id, name, destination }: { level: JenjangPemilik; id: string; name: string; destination: { level: JenjangPemilik; id: string; name: string } }) {
-  const { stok, updateStok } = useStok();
-  const { addTransfer } = useTransfer();
-  const eligible = stok.filter((row) => row.jenjang === level && row.pemilikId === id && row.beratKg > 0 && (row.klasifikasi ?? (row.jenjang === "desa" ? "belum_dipilah" : "dikelola")) === "dikelola");
+function OutgoingTransfer({ level, id, destination }: { level: JenjangPemilik; id: string; name: string; destination: { level: JenjangPemilik; id: string; name: string } }) {
+  const { stok } = useStok();
+  const { transfer } = useTransfer();
+  const eligible = stok.filter((row) => row.jenjang === level && row.pemilikId === id && row.beratKg > 0 && !row.terkunci && ["dikelola", "tidak_dikelola"].includes(row.klasifikasi ?? ""));
   const [stockId, setStockId] = useState(eligible[0]?.id ?? "");
   const [weight, setWeight] = useState("");
   const [message, setMessage] = useState("");
@@ -189,9 +167,8 @@ function OutgoingTransfer({ level, id, name, destination }: { level: JenjangPemi
       setMessage("Pilih stok dan berat yang tidak melebihi jumlah tersedia.");
       return;
     }
-    updateStok(stok.flatMap((row) => row.id !== selected.id ? [row] : row.beratKg - kg > 0.001 ? [{ ...row, beratKg: row.beratKg - kg, diperbaruiPada: new Date().toISOString() }] : []));
-    addTransfer({ id: generateId("tr"), asalJenjang: level, asalId: id, asalNama: name, tujuanJenjang: destination.level, tujuanId: destination.id, tujuanNama: destination.name, kategori: selected.kategori, beratKg: kg, kualitas: selected.kualitas, status: "menunggu", dibuatPada: new Date().toISOString(), reserved: true });
-    setMessage("Transfer dibuat. Stok dikurangi sementara sampai tujuan menerima atau menolak.");
+    try { createTransfer(selected.id, kg, destination); setMessage("Pengiriman diajukan dan stok dialokasikan. Konfirmasi saat kendaraan berangkat."); }
+    catch(error) { setMessage((error as Error).message); return; }
     setWeight("");
   };
 
@@ -199,13 +176,14 @@ function OutgoingTransfer({ level, id, name, destination }: { level: JenjangPemi
     <Card>
       <CardHeader><CardTitle>Kirim material ke {destination.name}</CardTitle><CardDescription>Stok dikunci saat dikirim dan dipulihkan bila tujuan menolak.</CardDescription></CardHeader>
       <CardContent className="space-y-3">
-        {eligible.length === 0 && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Belum ada stok yang ditandai dapat dikelola. Pilah stok desa terlebih dahulu sebelum membuat transfer.</p>}
+        {eligible.length === 0 && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Belum ada material siap disalurkan. Selesaikan pengesahan dan pemilahan stok terlebih dahulu.</p>}
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px_auto] md:items-end">
-          <label className="block min-w-0 space-y-1 text-sm"><span>Stok yang dapat dikelola</span><select value={selected?.id ?? ""} onChange={(event) => { setStockId(event.target.value); setWeight(""); setMessage(""); }} disabled={eligible.length === 0} className="h-10 w-full rounded-md border bg-background px-3 disabled:opacity-60">{eligible.map((row) => <option key={row.id} value={row.id}>{HARGA_SAMPAH[row.kategori].label} ? tersedia {row.beratKg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg</option>)}</select></label>
+          <label className="block min-w-0 space-y-1 text-sm"><span>Material siap disalurkan</span><select value={selected?.id ?? ""} onChange={(event) => { setStockId(event.target.value); setWeight(""); setMessage(""); }} disabled={eligible.length === 0} className="h-10 w-full rounded-md border bg-background px-3 disabled:opacity-60">{eligible.map((row) => <option key={row.id} value={row.id}>{HARGA_SAMPAH[row.kategori].label} - tersedia {row.beratKg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg</option>)}</select></label>
           <label className="block space-y-1 text-sm"><span>Berat transfer (kg)</span><input type="number" min="0.1" step="0.1" max={selected?.beratKg} value={weight} onChange={(event) => { setWeight(event.target.value); setMessage(""); }} placeholder={selected ? `Maks. ${selected.beratKg.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg` : "Pilah stok terlebih dahulu"} disabled={!selected} className="h-10 w-full rounded-md border bg-background px-3 disabled:opacity-60" /><span className="block text-[11px] text-muted-foreground">Jumlah tidak boleh melebihi stok terpilih.</span></label>
           <Button onClick={submit} disabled={!canSubmit} className="md:mb-[1.35rem]">Buat transfer</Button>
         </div>
         {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
+        {transfer.filter(t=>t.asalId===id && t.status==="menunggu").map(t=><div key={t.id} className="flex flex-wrap items-center justify-between gap-2 rounded border p-3"><span>{HARGA_SAMPAH[t.kategori].label} - {t.beratKg} kg - Menunggu keberangkatan</span><Button size="sm" onClick={()=>{try{processTransfer(t.id,"kirim");setMessage("Keberangkatan tercatat.");}catch(error){setMessage((error as Error).message);}}}>Konfirmasi dikirim</Button></div>)}
       </CardContent>
     </Card>
   );
@@ -236,9 +214,9 @@ function FundingPanel({ sourceId, targetId, targetName }: { sourceId: string; ta
   );
 }
 
-function MarketplacePanel({ level, ownerId, ownerName }: { level: JenjangPemilik; ownerId: string; ownerName: string }) {
-  const { stok, updateStok } = useStok();
-  const { listings, addListing } = useMarketplace();
+function MarketplacePanel({ level, ownerId }: { level: JenjangPemilik; ownerId: string; ownerName: string }) {
+  const { stok } = useStok();
+  const { listings } = useMarketplace();
   const [stockId, setStockId] = useState("");
   const [weight, setWeight] = useState("");
   const [price, setPrice] = useState("");
@@ -254,8 +232,7 @@ function MarketplacePanel({ level, ownerId, ownerName }: { level: JenjangPemilik
       setMessage("Periksa stok, berat, dan harga per kilogram.");
       return;
     }
-    updateStok(stok.flatMap((row) => row.id !== selected.id ? [row] : row.beratKg - kg > 0.001 ? [{ ...row, beratKg: row.beratKg - kg, diperbaruiPada: new Date().toISOString() }] : []));
-    addListing({ id: generateId("ls"), pemilikJenjang: level, pemilikId: ownerId, pemilikNama: ownerName, kategori: selected.kategori, beratKg: kg, kualitas: selected.kualitas, hargaPerKg: pricePerKg, status: "aktif", dibuatPada: new Date().toISOString() });
+    try { publishListing(selected.id, kg, pricePerKg); } catch(error) {setMessage((error as Error).message);return;}
     setMessage("Material dipublikasikan ke marketplace dan dikurangi dari stok tersedia.");
     setWeight(""); setPrice("");
   };
@@ -270,14 +247,14 @@ function MarketplacePanel({ level, ownerId, ownerName }: { level: JenjangPemilik
           <Button onClick={submit} disabled={!selected}>Terbitkan penawaran</Button>{message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
         </CardContent>
       </Card>
-      <Card><CardHeader><CardTitle>Penawaran material</CardTitle></CardHeader><CardContent className="space-y-2">{myListings.length === 0 ? <p className="text-sm text-muted-foreground">Belum ada penawaran.</p> : myListings.map((item) => <ListingRow key={item.id} item={item} />)}</CardContent></Card>
+      <Card><CardHeader><CardTitle>Penawaran material</CardTitle></CardHeader><CardContent className="space-y-2">{myListings.length === 0 ? <p className="text-sm text-muted-foreground">Belum ada penawaran.</p> : myListings.map((item) => <ListingRow key={item.id} item={item}>{item.status === "terjual" && item.pembayaran !== "lunas" && <Button size="sm" onClick={()=>{try{confirmPayment(item.id);setMessage("Pembayaran diterima dan dicatat ke dana BUMD.");}catch(error){setMessage((error as Error).message);}}}>Catat pembayaran diterima</Button>}</ListingRow>)}</CardContent></Card>
     </div>
   );
 }
 
 function ListingRow({ item, children }: { item: ListingMaterial; children?: React.ReactNode }) {
   const status = { aktif: "Tersedia", dipesan: "Menunggu konfirmasi penerimaan", terjual: "Diterima mitra", ditutup: "Ditutup" }[item.status];
-  return <div className="flex flex-col gap-2 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium">{HARGA_SAMPAH[item.kategori].label} · {item.beratKg} kg · {item.kualitas}</p><p className="text-muted-foreground">{item.pemilikNama} · {formatRupiah(item.hargaPerKg)}/kg · {status}{item.pembeli ? ` · ${item.pembeli}` : ""}</p></div>{children}</div>;
+  return <div className="flex flex-col gap-2 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium">{HARGA_SAMPAH[item.kategori].label} · {item.beratKg} kg · {item.kualitas}</p><p className="text-muted-foreground">{item.pemilikNama} · {formatRupiah(item.hargaPerKg)}/kg · {status}{item.pembeli ? ` · ${item.pembeli}` : ""}</p></div>{item.status === "terjual" && <Badge variant="outline">{item.pembayaran === "lunas" ? "Lunas" : "Belum dibayar"}</Badge>}{children}</div>;
 }
 
 function KecamatanDashboard() {
@@ -286,7 +263,7 @@ function KecamatanDashboard() {
   const { dana } = useDana();
   const totalStock = stok.filter((row) => row.jenjang === scope.level).reduce((sum, row) => sum + row.beratKg, 0);
   const fund = dana.find((item) => item.id === "dana-kecamatan");
-  return <div className="space-y-6"><div><h2 className="text-2xl font-bold">Koordinasi Kecamatan</h2><p className="text-muted-foreground">Konsolidasi stok desa, penyaluran dana, dan pengiriman ke BUMD Kabupaten.</p></div><div className="grid gap-4 sm:grid-cols-2"><Metric label="Stok terkonsolidasi" value={`${totalStock.toLocaleString("id-ID")} kg`} /><Metric label="Dana insentif tersedia" value={formatRupiah(fund?.saldo ?? 0)} /></div><StockSummary level="kecamatan" /><IncomingTransfers level={scope.level} id={scope.id} name={scope.name} /><OutgoingTransfer level={scope.level} id={scope.id} name={scope.name} destination={{ level: "kabupaten", id: "bumd-tasikmalaya", name: "BUMD Kabupaten" }} /><FundingPanel sourceId="dana-kecamatan" targetId="dana-desa" targetName="Desa Sukamanah" /></div>;
+  return <div className="space-y-6"><div><h2 className="text-2xl font-bold">Koordinasi Kecamatan</h2><p className="text-muted-foreground">Konsolidasi stok desa, penyaluran dana, dan pengiriman ke BUMD Kabupaten.</p></div><div className="grid gap-4 sm:grid-cols-2"><Metric label="Stok terkonsolidasi" value={`${totalStock.toLocaleString("id-ID")} kg`} /><Metric label="Dana insentif tersedia" value={formatRupiah(fund?.saldo ?? 0)} /></div><OperationalOverview /></div>;
 }
 
 function BumdDashboard() {
@@ -297,7 +274,7 @@ function BumdDashboard() {
   const totalStock = stok.filter((row) => row.jenjang === scope.level).reduce((sum, row) => sum + row.beratKg, 0);
   const activeListings = listings.filter((item) => item.status === "aktif").length;
   const fund = dana.find((item) => item.id === "dana-kabupaten");
-  return <div className="space-y-6"><div><h2 className="text-2xl font-bold">BUMD Kabupaten</h2><p className="text-muted-foreground">Penerimaan material tingkat akhir, pengelolaan dana insentif, dan penawaran ke mitra.</p></div><div className="grid gap-4 sm:grid-cols-3"><Metric label="Stok BUMD" value={`${totalStock.toLocaleString("id-ID")} kg`} /><Metric label="Penawaran aktif" value={activeListings} /><Metric label="Dana insentif kabupaten" value={formatRupiah(fund?.saldo ?? 0)} /></div><StockSummary level="kabupaten" /><IncomingTransfers level={scope.level} id={scope.id} name={scope.name} /><FundingPanel sourceId="dana-kabupaten" targetId="dana-kecamatan" targetName="Kecamatan Singaparna" /><MarketplacePanel level={scope.level} ownerId={scope.id} ownerName={scope.name} /></div>;
+  return <div className="space-y-6"><div><h2 className="text-2xl font-bold">BUMD Kabupaten</h2><p className="text-muted-foreground">Penerimaan material tingkat akhir, pengelolaan dana insentif, dan penawaran ke mitra.</p></div><div className="grid gap-4 sm:grid-cols-3"><Metric label="Stok BUMD" value={`${totalStock.toLocaleString("id-ID")} kg`} /><Metric label="Penawaran aktif" value={activeListings} /><Metric label="Dana insentif kabupaten" value={formatRupiah(fund?.saldo ?? 0)} /></div><OperationalOverview /></div>;
 }
 
 function MitraDashboard() {
@@ -354,15 +331,21 @@ function KabupatenDashboard() {
   const totalProduk = pengolahan.reduce((sum, item) => sum + item.outputKg, 0);
   const totalResidu = pengolahan.reduce((sum, item) => sum + item.residuKg, 0);
   const totalHilang = pengolahan.reduce((sum, item) => sum + item.kehilanganKg, 0);
-  return <div className="space-y-6"><div><h2 className="text-2xl font-bold">Dashboard Kabupaten</h2><p className="text-muted-foreground">Pemantauan berjenjang dan neraca massa material. Data ini ilustrasi, belum menggantikan pelaporan operasional resmi.</p></div><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Material dari setoran disetujui" value={`${totalMasuk.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Stok saat ini" value={`${totalStok.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Terkirim ke mitra" value={`${totalDikirim.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Input pengolahan tercatat" value={`${totalDiolah.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /></div><Card><CardHeader><CardTitle>Neraca hasil pengolahan</CardTitle><CardDescription>Jumlah material yang diolah diurai menjadi produk, residu, dan kehilangan proses.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-3"><Metric label="Produk dimanfaatkan" value={`${totalProduk.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Residu akhir" value={`${totalResidu.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Kehilangan proses tercatat" value={`${totalHilang.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /></CardContent></Card><StockSummary /><TransferLog /><MarketLog /></div>;
+  return <div className="space-y-6"><div><h2 className="text-2xl font-bold">Dashboard Kabupaten</h2><p className="text-muted-foreground">Pemantauan berjenjang dan neraca massa material. Pantau kapasitas, penyaluran, dan hasil pengolahan setiap wilayah.</p></div><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Material dari setoran disetujui" value={`${totalMasuk.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Stok saat ini" value={`${totalStok.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Terkirim ke mitra" value={`${totalDikirim.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Input pengolahan tercatat" value={`${totalDiolah.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /></div><Card><CardHeader><CardTitle>Neraca hasil pengolahan</CardTitle><CardDescription>Jumlah material yang diolah diurai menjadi produk, residu, dan kehilangan proses.</CardDescription></CardHeader><CardContent className="grid gap-3 sm:grid-cols-3"><Metric label="Produk dimanfaatkan" value={`${totalProduk.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Residu akhir" value={`${totalResidu.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /><Metric label="Kehilangan proses tercatat" value={`${totalHilang.toLocaleString("id-ID", { maximumFractionDigits: 1 })} kg`} /></CardContent></Card><OperationalOverview /><StockSummary /><TransferLog /><MarketLog /></div>;
 }
 
 function TransferLog() {
   const { transfer } = useTransfer();
-  return <Card><CardHeader><CardTitle>Jejak perpindahan material</CardTitle><CardDescription>Setiap transfer menunjukkan asal, tujuan, berat, waktu, dan status penerimaan.</CardDescription></CardHeader><CardContent className="space-y-2">{transfer.map((item) => <div key={item.id} className="flex flex-col gap-1 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium">{item.asalNama} → {item.tujuanNama}</p><p className="text-muted-foreground">{HARGA_SAMPAH[item.kategori].label} · {item.beratKg} kg · {formatTanggalPendek(item.dibuatPada)}</p></div><Badge variant={item.status === "diterima" ? "default" : item.status === "ditolak" ? "destructive" : "secondary"}>{item.status}</Badge></div>)}</CardContent></Card>;
+  return <Card><CardHeader><CardTitle>Jejak perpindahan material</CardTitle><CardDescription>Setiap transfer menunjukkan asal, tujuan, berat, waktu, dan status penerimaan.</CardDescription></CardHeader><CardContent className="space-y-2">{transfer.map((item) => <div key={item.id} className="flex flex-col gap-1 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium">{item.asalNama} → {item.tujuanNama}</p><p className="text-muted-foreground">{HARGA_SAMPAH[item.kategori].label} · {item.beratKg} kg · {formatTanggalPendek(item.dibuatPada)}</p><p className="text-xs text-muted-foreground">{item.beratDiterima !== undefined ? `Diterima ${item.beratDiterima} kg. ` : ""}{item.alasanSelisih || item.alasanTolak}</p></div><Badge variant={item.status === "diterima" ? "default" : item.status === "ditolak" ? "destructive" : "secondary"}>{item.status}</Badge></div>)}</CardContent></Card>;
 }
 
 function MarketLog() {
   const { listings } = useMarketplace();
   return <Card><CardHeader><CardTitle>Penyaluran marketplace</CardTitle><CardDescription>Material yang sudah dipesan dan diterima mitra.</CardDescription></CardHeader><CardContent className="space-y-2">{listings.map((item) => <ListingRow key={item.id} item={item} />)}</CardContent></Card>;
+}
+
+function OperationalOverview() {
+ const {stok}=useStok(); const {transfer}=useTransfer(); const {dana}=useDana(); const {setoran}=useSetoran();
+ const owners=[...new Map(stok.map(s=>[s.pemilikId,{id:s.pemilikId,name:s.namaPemilik,level:s.jenjang}])).values()];
+ return <Card><CardHeader><CardTitle>Perhatian wilayah</CardTitle><CardDescription>Kapasitas, pengiriman, dana, dan residu yang perlu ditindaklanjuti.</CardDescription></CardHeader><CardContent className="space-y-3">{owners.map(owner=>{const total=stok.filter(s=>s.pemilikId===owner.id).reduce((a,s)=>a+s.beratKg,0);return <div key={owner.id} className="rounded border p-3 text-sm"><strong>{owner.name}</strong><p>{total.toLocaleString("id-ID")} / {CAPACITY_KG[owner.level].toLocaleString("id-ID")} kg {total>=CAPACITY_KG[owner.level]*0.8?"? mendekati penuh: jadwalkan penyaluran":"? kapasitas tersedia"}</p></div>;})}<p className="text-sm">{transfer.filter(t=>["menunggu","dikirim"].includes(t.status)).length} pengiriman belum selesai ? {transfer.filter(t=>t.status==="ditolak").length} pengiriman ditolak</p><p className="text-sm">Residu menunggu penanganan: {stok.filter(s=>s.klasifikasi==="residu").reduce((a,s)=>a+s.beratKg,0).toLocaleString("id-ID")} kg</p><p className="text-sm">Selisih penerimaan: {transfer.filter(t=>t.status==="diterima").reduce((a,t)=>a+t.beratKg-(t.beratDiterima??t.beratKg),0).toLocaleString("id-ID")} kg - lihat jejak transfer.</p>{dana.map(d=><p key={d.id} className="text-sm">{d.namaPemilik}: {formatRupiah(d.saldo)} {d.id==="dana-desa" && d.saldo<setoran.filter(s=>s.status==="terverifikasi").reduce((a,s)=>a+s.totalNilai,0)?"? dana belum cukup untuk antrean pengesahan":""}</p>)}</CardContent></Card>;
 }

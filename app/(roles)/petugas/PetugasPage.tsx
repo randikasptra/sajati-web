@@ -42,10 +42,11 @@ import {
   type SetoranItem,
   type Setoran,
 } from "@/data/mock";
-import { useSetoran, useWarga } from "@/lib/store";
+import { useSetoran, useWarga, recordDeposit, verifyDeposit } from "@/lib/store";
 import { formatRupiah, formatBerat, formatTanggalPendek, generateId } from "@/lib/utils";
 import { usePenjemputan } from "@/lib/store";
 import type { Penjemputan } from "@/data/mock";
+import { ScheduleManager } from "@/app/components/ScheduleManager";
 import { VillageStockPanel } from "@/app/(roles)/jaringan/NetworkPage";
 
 function getRecordPickupId() {
@@ -64,7 +65,7 @@ export function PetugasPage({
   onNavChange: (href: string) => void;
 }) {
   const tab = activeNav === "/petugas/catat" || activeNav === "/petugas/pilah" ? "catat" : activeNav === "/petugas/rute-keliling" ? "jemput" : activeNav === "/petugas/stok" ? "stok" : "antrian";
-  const { setoran, addSetoran, updateSetoranById } = useSetoran();
+  const { setoran } = useSetoran();
   const { wargaList } = useWarga();
   const { penjemputan, updatePenjemputanById } = usePenjemputan();
   const recordPickupId = useSyncExternalStore(subscribeRecordPickup, getRecordPickupId, () => null);
@@ -147,8 +148,8 @@ export function PetugasPage({
           <AntrianVerifikasi
             menunggu={menunggu}
             wargaList={wargaList}
-            onVerifikasi={(id) => updateSetoranById(id, { status: "terverifikasi", petugasId: "p1" })}
-            onTolak={(id, alasan) => updateSetoranById(id, { status: "ditolak", petugasId: "p1", alasanTolak: alasan })}
+            onVerifikasi={(id) => verifyDeposit(id)}
+            onTolak={(id, alasan) => verifyDeposit(id, alasan)}
           />
         </TabsContent>
 
@@ -156,7 +157,7 @@ export function PetugasPage({
           <CatatSetoran
             key={recordPickup?.id ?? "manual"}
             wargaList={wargaList}
-            onSubmit={(s) => addSetoran(s)}
+            onSubmit={recordDeposit}
             initialWargaId={recordPickup?.wargaId}
             penjemputanId={recordPickup?.id}
             onCompleted={recordPickup ? () => {
@@ -168,6 +169,7 @@ export function PetugasPage({
           />
         </TabsContent>
         <TabsContent value="jemput">
+          <ScheduleManager />
           <AntrianPenjemputan
             penjemputan={penjemputan}
             wargaList={wargaList}
@@ -430,7 +432,7 @@ function CatatSetoran({
 
   const handleSubmit = () => {
     if (!wargaId || items.length === 0) return;
-    onSubmit({
+    try { onSubmit({
       id: generateId("s"),
       wargaId,
       penjemputanId,
@@ -440,11 +442,11 @@ function CatatSetoran({
       petugasId: "p1",
       totalNilai,
       createdAt: new Date().toISOString(),
-    });
+    }); } catch(error) { setSuccessMessage((error as Error).message); setSuccessOpen(true); return; }
     setWargaId("");
     setWargaSearch("");
     setItems([]);
-    setSuccessMessage("Berat hasil timbang tersimpan dan setoran masuk ke antrean verifikasi. Pemilahan kelayakan dilakukan dari stok desa setelah setoran disetujui.");
+    setSuccessMessage("Berat hasil timbang tersimpan dan setoran masuk ke antrean verifikasi. Stok fisik tercatat dan dikunci sampai pengesahan nilai selesai.");
     setSuccessOpen(true);
     onCompleted?.();
   };
@@ -455,7 +457,7 @@ function CatatSetoran({
         {/* Form */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Pilah dan Timbang Setoran</CardTitle>
+            <CardTitle className="text-base">Timbang dan Catat Setoran</CardTitle>
             <CardDescription>Berat baru dicatat setelah sampah ditimbang petugas di titik layanan desa atau rute keliling.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">

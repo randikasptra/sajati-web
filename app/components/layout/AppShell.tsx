@@ -39,7 +39,6 @@ import {
   Handshake,
   ChartNoAxesCombined,
   ChevronDown,
-  RotateCcw,
   LogOut,
   type LucideIcon,
 } from "lucide-react";
@@ -87,7 +86,6 @@ export function AppShell({
   children: ReactNode;
 }) {
   const currentRole = roles.find((r) => r.key === activeRole)!;
-  const CurrentIcon = currentRole.icon;
 
   return (
     <SidebarProvider>
@@ -95,53 +93,7 @@ export function AppShell({
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
-              <DropdownMenu>
-                <DropdownMenuTrigger render={<SidebarMenuButton size="lg" className="cursor-pointer w-full" />}>
-                    <div className="flex aspect-square size-9 items-center justify-center overflow-hidden rounded-xl border-2 border-[#d0dfaa] bg-white shadow-sm">
-                      <Image src="/img/SAJATI_Logo.png" alt="" width={64} height={64} className="size-full object-cover" />
-                    </div>
-                    <div className="grid flex-1 text-left text-sm leading-tight">
-                      <span className="truncate font-bold">SAJATI</span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {currentRole.label}
-                      </span>
-                    </div>
-                    <ChevronDown className="ml-auto size-4" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  className="w-[--radix-dropdown-menu-trigger-width] min-w-56"
-                  align="start"
-                >
-                  <DropdownMenuGroup>
-                    <DropdownMenuLabel className="text-xs text-muted-foreground">
-                      Pilih Peran Demo
-                    </DropdownMenuLabel>
-                  </DropdownMenuGroup>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuGroup>
-                    {roles.map((role) => {
-                      const Icon = role.icon;
-                      return (
-                        <DropdownMenuItem
-                          key={role.key}
-                          onClick={() => onRoleChange(role.key)}
-                          className="cursor-pointer gap-2"
-                        >
-                          <Icon className="size-4" />
-                          <div className="flex-1">
-                            <span className="font-medium">{role.label}</span>
-                            {activeRole === role.key && (
-                              <Badge variant="secondary" className="ml-2 text-[10px] px-1.5 py-0">
-                                Aktif
-                              </Badge>
-                            )}
-                          </div>
-                        </DropdownMenuItem>
-                      );
-                    })}
-                  </DropdownMenuGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <div className="flex items-center gap-3 px-2 py-3"><Image src="/img/SAJATI_Logo.png" alt="Logo SAJATI" width={40} height={40} className="rounded-xl bg-white" /><div><strong className="block">SAJATI</strong><span className="text-xs text-muted-foreground">{currentRole.label}</span></div></div>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarHeader>
@@ -180,37 +132,60 @@ export function AppShell({
         </SidebarContent>
 
         <SidebarFooter>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                onClick={resetPrototype}
-                className="text-muted-foreground cursor-pointer"
-              >
-                <RotateCcw className="size-4" />
-                <span>Reset Data Demo</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-          <div className="px-3 pb-2">
-            <Badge variant="outline" className="text-[10px] font-normal">
-              Data ilustrasi — Prototype
-            </Badge>
-          </div>
+          <details className="px-3 pb-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Pengaturan presentasi</summary>              <DropdownMenu>
+                <DropdownMenuTrigger className="my-2 flex w-full items-center justify-between rounded border px-3 py-2">Ganti peran<ChevronDown className="size-4" /></DropdownMenuTrigger>
+                <DropdownMenuContent
+                  className="w-[--radix-dropdown-menu-trigger-width] min-w-56"
+                  align="start"
+                >
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel className="text-xs text-muted-foreground">
+                      Pengaturan presentasi ? ganti peran
+                    </DropdownMenuLabel>
+                  </DropdownMenuGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    {roles.map((role) => {
+                      const Icon = role.icon;
+                      return (
+                        <DropdownMenuItem
+                          key={role.key}
+                          onClick={() => onRoleChange(role.key)}
+                          className="cursor-pointer gap-2"
+                        >
+                          <Icon className="size-4" />
+                          <div className="flex-1">
+                            <span className="font-medium">{role.label}</span>
+                            {activeRole === role.key && (
+                              <Badge variant="secondary" className="ml-2 text-[10px] px-1.5 py-0">
+                                Aktif
+                              </Badge>
+                            )}
+                          </div>
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu><button className="rounded border px-3 py-2" onClick={()=>{if(window.confirm("Kembalikan seluruh data presentasi ke kondisi awal?")) resetPrototype();}}>Kembalikan data awal</button></details>
         </SidebarFooter>
       </Sidebar>
 
       <SidebarInset>
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-[#35674b] bg-[#0c4a34] px-4 text-white shadow-sm">
           <SidebarTrigger className="-ml-1 hidden md:inline-flex" />
-          <Separator orientation="vertical" className="mr-2 !h-4" />
+          <Separator orientation="vertical" className="mr-2 hidden !h-4 md:block" />
           <div className="flex items-center gap-2">
-            <CurrentIcon className="size-4 text-[#c5df73]" />
+            <Image
+              src="/img/SAJATI_Logo.png"
+              alt="Logo SAJATI"
+              width={36}
+              height={36}
+              className="size-9 shrink-0 rounded-full bg-white object-contain p-0.5"
+            />
             <h1 className="text-sm font-semibold">{currentRole.label}</h1>
           </div>
-          <Badge variant="outline" className="ml-auto border-white/30 bg-white/10 text-[10px] text-white">
-            Prototype
-          </Badge>
-          <button type="button" onClick={onLogout} className="ml-2 inline-flex items-center gap-1.5 rounded-lg border border-white/25 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-white/10" aria-label="Keluar ke halaman login">
+          <button type="button" onClick={onLogout} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-white/25 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-white/10" aria-label="Keluar ke halaman login">
             <LogOut className="size-3.5" /><span className="hidden sm:inline">Keluar</span>
           </button>
         </header>

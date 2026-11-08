@@ -58,7 +58,8 @@ const STORAGE_KEYS = {
 function loadFromStorage<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
   try {
-    const raw = localStorage.getItem(key);
+    const snapshot = JSON.parse(localStorage.getItem("sajati_snapshot_v2") ?? "{}");
+    const raw = snapshot[key] !== undefined ? JSON.stringify(snapshot[key]) : localStorage.getItem(key);
     if (raw) {
       const stored = JSON.parse(raw) as T;
       // The original demo seed included a pre-filled pending-weight row. Treat
@@ -77,6 +78,7 @@ function loadFromStorage<T>(key: string, fallback: T): T {
           if (!stock.klasifikasi) stock.klasifikasi = stock.jenjang === "desa" ? "belum_dipilah" : "dikelola";
         }
       }
+      if (key === STORAGE_KEYS.stok && Array.isArray(stored)) return [...new Map((stored as StokMaterial[]).map(r=>[r.id,r])).values()] as T;
       return stored;
     }
   } catch {
@@ -87,11 +89,8 @@ function loadFromStorage<T>(key: string, fallback: T): T {
 
 function saveToStorage<T>(key: string, data: T): void {
   if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(key, JSON.stringify(data));
-  } catch {
-    // silently fail
-  }
+  const snapshot = JSON.parse(localStorage.getItem("sajati_snapshot_v2") ?? "{}");
+  localStorage.setItem("sajati_snapshot_v2", JSON.stringify({ ...snapshot, [key]: data }));
 }
 
 // Custom event for cross-tab / cross-component sync
@@ -233,15 +232,7 @@ export function useDana() {
   const [dana, updateDana] = useStoredCollection<DanaInsentif>(STORAGE_KEYS.dana, MOCK_DANA);
   const [transaksi, updateTransaksi] = useStoredCollection<TransaksiDana>(STORAGE_KEYS.transaksiDana, []);
   const getDana = useCallback((id: string) => dana.find((item) => item.id === id), [dana]);
-  const transferDana = useCallback((fromId: string, toId: string, amount: number) => {
-    if (amount <= 0) return false;
-    const source = dana.find((item) => item.id === fromId);
-    const target = dana.find((item) => item.id === toId);
-    if (!source || !target || source.saldo < amount) return false;
-    updateDana(dana.map((item) => item.id === fromId ? { ...item, saldo: item.saldo - amount } : item.id === toId ? { ...item, saldo: item.saldo + amount } : item));
-    updateTransaksi([{ id: `dn${Date.now().toString(36)}`, sumberId: fromId, sumberNama: source.namaPemilik, tujuanId: toId, tujuanNama: target.namaPemilik, jenis: "penyaluran", jumlah: amount, tanggal: new Date().toISOString() }, ...transaksi]);
-    return true;
-  }, [dana, transaksi, updateDana, updateTransaksi]);
+  const transferDana = moveFunds;
   const deductDana = useCallback((id: string, amount: number, tujuanNama = "Saldo warga", referensi?: string) => {
     const source = dana.find((item) => item.id === id);
     if (!source || amount <= 0 || source.saldo < amount) return false;
@@ -294,6 +285,7 @@ export function useActiveRole() {
 // ---------- Reset prototype ----------
 export function resetPrototype() {
   if (typeof window === "undefined") return;
+  localStorage.removeItem("sajati_snapshot_v2");
   Object.values(STORAGE_KEYS).forEach((key) => {
     try {
       localStorage.removeItem(key);
@@ -303,4 +295,134 @@ export function resetPrototype() {
   });
   dispatchSync();
   window.location.reload();
+}
+
+
+// One storage write commits all affected collections. Replace this boundary with
+// a backend transaction when server persistence is introduced.
+function commitCollections(changes: Record<string, unknown>) {
+  const snapshot = JSON.parse(localStorage.getItem("sajati_snapshot_v2") ?? "{}");
+  localStorage.setItem("sajati_snapshot_v2", JSON.stringify({ ...snapshot, ...changes }));
+  dispatchSync();
+}
+const uid = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
+const stocks = () => loadFromStorage<StokMaterial[]>(STORAGE_KEYS.stok, MOCK_STOK);
+const deposits = () => loadFromStorage<Setoran[]>(STORAGE_KEYS.setoran, MOCK_SETORAN);
+function depositStocks(s: Setoran): StokMaterial[] {
+  return s.items.map(item => ({ id: uid("st"), setoranId: s.id, terkunci: true,
+    jenjang: "desa", pemilikId: "desa-sukamanah", namaPemilik: "Desa Sukamanah",
+    kategori: item.kategori, beratKg: item.berat, kualitas: item.kualitas,
+    klasifikasi: "belum_dipilah", diperbaruiPada: new Date().toISOString() }));
+}
+export function recordDeposit(s: Setoran) {
+  const all = deposits(), inventory = stocks();
+  if (all.some(row => row.id === s.id || (s.penjemputanId && row.penjemputanId === s.penjemputanId))) throw new Error("Setoran ini sudah dicatat.");
+  if (!s.items.length || s.items.some(i => !Number.isFinite(i.berat) || i.berat <= 0)) throw new Error("Berat timbang harus valid.");
+  const total = inventory.filter(i => i.pemilikId === "desa-sukamanah").reduce((a,i) => a+i.beratKg,0);
+  if (total + s.items.reduce((a,i)=>a+i.berat,0) > 300) throw new Error("Kapasitas desa tidak cukup. Salurkan stok sebelum menerima material baru.");
+  const requests = loadFromStorage<Penjemputan[]>(STORAGE_KEYS.penjemputan, MOCK_PENJEMPUTAN);
+  commitCollections({ [STORAGE_KEYS.setoran]: [{...s, stokTercatat: true}, ...all],
+    [STORAGE_KEYS.stok]: [...inventory, ...depositStocks(s)],
+    [STORAGE_KEYS.penjemputan]: requests.map(r => r.id === s.penjemputanId ? {...r, status: "selesai"} : r) });
+}
+export function verifyDeposit(id: string, reason?: string) {
+  const all=deposits(), s=all.find(r=>r.id===id);
+  if (!s || s.status !== "menunggu_verifikasi") throw new Error("Setoran sudah diproses.");
+  commitCollections({[STORAGE_KEYS.setoran]: all.map(r=>r.id===id?{...r,status: reason ? "ditolak":"terverifikasi",alasanTolak:reason,petugasId:"p1"}:r)});
+}
+export function approveDeposit(id: string) {
+  const all=deposits(), s=all.find(r=>r.id===id);
+  if (!s || s.status!=="terverifikasi") throw new Error("Setoran sudah diproses atau belum diverifikasi.");
+  const funds=loadFromStorage<DanaInsentif[]>(STORAGE_KEYS.dana,MOCK_DANA);
+  const people=loadFromStorage<Warga[]>(STORAGE_KEYS.warga,MOCK_WARGA);
+  const fund=funds.find(r=>r.id==="dana-desa"), person=people.find(r=>r.id===s.wargaId);
+  if (!person || !fund || fund.saldo<s.totalNilai) throw new Error("Dana insentif desa belum cukup. Stok tetap tercatat; minta penyaluran dana kecamatan.");
+  let inventory=stocks();
+  if (!s.stokTercatat) inventory=[...inventory,...depositStocks(s)];
+  const log=loadFromStorage<TransaksiDana[]>(STORAGE_KEYS.transaksiDana,[]);
+  commitCollections({[STORAGE_KEYS.setoran]:all.map(r=>r.id===id?{...r,status:"saldo_ditambahkan",stokTercatat:true,adminId:"a1"}:r),
+    [STORAGE_KEYS.stok]:inventory.map(r=>r.setoranId===id?{...r,terkunci:false}:r),
+    [STORAGE_KEYS.warga]:people.map(r=>r.id===person.id?{...r,saldo:r.saldo+s.totalNilai}:r),
+    [STORAGE_KEYS.dana]:funds.map(r=>r.id===fund.id?{...r,saldo:r.saldo-s.totalNilai}:r),
+    [STORAGE_KEYS.transaksiDana]:[{id:uid("dn"),sumberId:fund.id,sumberNama:fund.namaPemilik,tujuanNama:person.nama,jenis:"insentif_warga",jumlah:s.totalNilai,referensi:id,tanggal:new Date().toISOString()},...log] });
+}
+export function sortStock(id: string, kg: number, classification: StokMaterial["klasifikasi"]) {
+  const inventory=stocks(), row=inventory.find(r=>r.id===id);
+  if (!row || row.terkunci || !Number.isFinite(kg) || kg<=0 || kg>row.beratKg) throw new Error("Pilih berat dalam stok yang sudah disahkan.");
+  const next=inventory.flatMap(r=>r.id!==id?[r]:r.beratKg-kg>0.0001?[{...r,beratKg:r.beratKg-kg}]:[]);
+  next.push({...row,id:uid("st"),beratKg:kg,klasifikasi:classification,diperbaruiPada:new Date().toISOString()});
+  commitCollections({[STORAGE_KEYS.stok]:next});
+}
+export function createTransfer(stockId: string, kg: number, destination: {level: TransferMaterial["tujuanJenjang"];id:string;name:string}) {
+  const inventory=stocks(), source=inventory.find(r=>r.id===stockId);
+  if (!source || source.terkunci || !["dikelola","tidak_dikelola"].includes(source.klasifikasi??"") || !Number.isFinite(kg) || kg<=0 || kg>source.beratKg) throw new Error("Stok tidak tersedia untuk pengiriman ini.");
+  const transfers=loadFromStorage<TransferMaterial[]>(STORAGE_KEYS.transfer,MOCK_TRANSFER);
+  const row:TransferMaterial={id:uid("tr"),stokAsalId:source.id,asalId:source.pemilikId,asalNama:source.namaPemilik,asalJenjang:source.jenjang,tujuanId:destination.id,tujuanNama:destination.name,tujuanJenjang:destination.level,kategori:source.kategori,kualitas:source.kualitas,klasifikasi:source.klasifikasi,beratKg:kg,status:"menunggu",reserved:true,dibuatPada:new Date().toISOString()};
+  commitCollections({[STORAGE_KEYS.stok]:inventory.flatMap(r=>r.id!==source.id?[r]:r.beratKg>kg?[{...r,beratKg:r.beratKg-kg}]:[]),[STORAGE_KEYS.transfer]:[row,...transfers]});
+}
+export function processTransfer(id:string, action:"kirim"|"terima"|"tolak", receivedKg?:number, reason="") {
+  const transfers=loadFromStorage<TransferMaterial[]>(STORAGE_KEYS.transfer,MOCK_TRANSFER), item=transfers.find(r=>r.id===id);
+  if (!item || !["menunggu","dikirim"].includes(item.status)) throw new Error("Transfer sudah diproses.");
+  if (action==="kirim") {
+    if(item.status!=="menunggu") throw new Error("Material sudah dikirim.");
+    commitCollections({[STORAGE_KEYS.transfer]:transfers.map(r=>r.id===id?{...r,status:"dikirim"}:r)}); return;
+  }
+  if(action==="terima" && item.status!=="dikirim") throw new Error("Pengirim belum mengonfirmasi keberangkatan.");
+  if(action==="tolak" && !reason.trim()) throw new Error("Isi alasan penolakan.");
+  const kg=action==="terima"?receivedKg??item.beratKg:item.beratKg;
+  if(!Number.isFinite(kg)||kg<=0||kg>item.beratKg) throw new Error("Berat diterima harus positif dan tidak melebihi berat kirim. Jika lebih, tolak untuk timbang ulang.");
+  if(action==="terima" && Math.abs(kg-item.beratKg)>0.001 && !reason.trim()) throw new Error("Isi alasan selisih timbang.");
+  let inventory=stocks();
+  const owner=action==="terima"?item.tujuanId:item.asalId;
+  const level=action==="terima"?item.tujuanJenjang:item.asalJenjang;
+  const capacity={desa:300,kecamatan:2000,kabupaten:10000}[level];
+  if(action==="terima" && inventory.filter(r=>r.pemilikId===owner).reduce((a,r)=>a+r.beratKg,0)+kg>capacity) throw new Error("Kapasitas tujuan tidak cukup. Salurkan stok atau tolak disertai alasan.");
+  if(!item.reserved && action==="terima") {
+    const source=inventory.find(r=>r.pemilikId===item.asalId && r.kategori===item.kategori && r.beratKg>=item.beratKg);
+    if(!source) throw new Error("Stok asal tidak mencukupi.");
+    inventory=inventory.flatMap(r=>r.id!==source.id?[r]:r.beratKg>item.beratKg?[{...r,beratKg:r.beratKg-item.beratKg}]:[]);
+  }
+  if(action==="terima" || item.reserved) inventory.push({id:uid("st"),jenjang:level,pemilikId:owner,namaPemilik:action==="terima"?item.tujuanNama:item.asalNama,kategori:item.kategori,beratKg:kg,kualitas:item.kualitas??"sedang",klasifikasi:action==="terima"?"belum_dipilah":item.klasifikasi??"dikelola",diperbaruiPada:new Date().toISOString()});
+  commitCollections({[STORAGE_KEYS.stok]:inventory,[STORAGE_KEYS.transfer]:transfers.map(r=>r.id===id?{...r,status:action==="terima"?"diterima":"ditolak",beratDiterima:action==="terima"?kg:undefined,alasanSelisih:action==="terima"?reason:undefined,alasanTolak:action==="tolak"?reason:undefined,diterimaPada:new Date().toISOString()}:r)});
+}
+export interface JadwalKeliling {id:string;wilayah:string;titik:string;tanggal:string;waktu:string;status:"terbit"|"ditutup"}
+const INITIAL_SCHEDULES:JadwalKeliling[]=[];
+export function useJadwal() {
+ const [jadwal,updateJadwal]=useStoredCollection<JadwalKeliling>("sajati_jadwal",INITIAL_SCHEDULES);
+ return {jadwal,updateJadwal};
+}
+
+export function publishListing(stockId:string,kg:number,price:number) {
+ const inventory=stocks(),source=inventory.find(s=>s.id===stockId);
+ if(!source||source.terkunci||source.klasifikasi!=="dikelola"||!Number.isFinite(kg)||kg<=0||kg>source.beratKg||!Number.isFinite(price)||price<=0)throw new Error("Stok, berat, atau harga tidak valid.");
+ const listings=loadFromStorage<ListingMaterial[]>(STORAGE_KEYS.listing,MOCK_LISTING);
+ commitCollections({[STORAGE_KEYS.stok]:inventory.flatMap(s=>s.id!==stockId?[s]:s.beratKg>kg?[{...s,beratKg:s.beratKg-kg}]:[]),[STORAGE_KEYS.listing]:[{id:uid("ls"),pemilikJenjang:source.jenjang,pemilikId:source.pemilikId,pemilikNama:source.namaPemilik,kategori:source.kategori,beratKg:kg,kualitas:source.kualitas,hargaPerKg:price,status:"aktif",pembayaran:"belum_dibayar",dibuatPada:new Date().toISOString()},...listings]});
+}
+export function confirmPayment(id:string) {
+ const listings=loadFromStorage<ListingMaterial[]>(STORAGE_KEYS.listing,MOCK_LISTING),item=listings.find(r=>r.id===id);
+ if(!item||item.status!=="terjual"||item.pembayaran==="lunas")throw new Error("Pembayaran sudah dicatat atau barang belum diterima.");
+ const funds=loadFromStorage<DanaInsentif[]>(STORAGE_KEYS.dana,MOCK_DANA),fundId=item.pemilikJenjang==="kabupaten"?"dana-kabupaten":"dana-kecamatan";
+ const logs=loadFromStorage<TransaksiDana[]>(STORAGE_KEYS.transaksiDana,[]);
+ const amount=Math.round(item.beratKg*item.hargaPerKg);
+ commitCollections({[STORAGE_KEYS.listing]:listings.map(r=>r.id===id?{...r,pembayaran:"lunas",dibayarPada:new Date().toISOString()}:r),[STORAGE_KEYS.dana]:funds.map(f=>f.id===fundId?{...f,saldo:f.saldo+amount}:f),[STORAGE_KEYS.transaksiDana]:[{id:uid("dn"),sumberId:"mitra",sumberNama:item.pembeli??"Mitra",tujuanId:fundId,tujuanNama:item.pemilikNama,jenis:"penjualan",jumlah:amount,referensi:id,tanggal:new Date().toISOString()},...logs]});
+}
+export function redeemGoods(wargaId:string,cart:Record<string,number>) {
+ const people=loadFromStorage<Warga[]>(STORAGE_KEYS.warga,MOCK_WARGA),person=people.find(w=>w.id===wargaId);
+ const catalog=loadFromStorage<BarangKopdes[]>(STORAGE_KEYS.katalog,MOCK_BARANG_KOPDES);
+ const entries=Object.entries(cart).filter(([,n])=>n>0);
+ if(!person||!entries.length)throw new Error("Pilih barang terlebih dahulu.");
+ const items=entries.map(([id,qty])=>{const item=catalog.find(b=>b.id===id);if(!item||!Number.isInteger(qty)||qty<1||qty>item.stok)throw new Error("Stok barang tidak mencukupi.");return {barangId:id,namaBarang:item.nama,jumlah:qty,nilaiTukar:item.nilaiTukar,subtotal:qty*item.nilaiTukar};});
+ const total=items.reduce((a,i)=>a+i.subtotal,0);
+ if(total>person.saldo)throw new Error("Saldo tidak mencukupi.");
+ const id=uid("pn"),orders=loadFromStorage<Penukaran[]>(STORAGE_KEYS.penukaran,MOCK_PENUKARAN);
+ commitCollections({[STORAGE_KEYS.warga]:people.map(w=>w.id===wargaId?{...w,saldo:w.saldo-total}:w),[STORAGE_KEYS.katalog]:catalog.map(b=>({...b,stok:b.stok-(cart[b.id]??0)})),[STORAGE_KEYS.penukaran]:[{id,wargaId,tanggal:new Date().toISOString(),items,totalNilai:total,status:"menunggu"},...orders]});return id;
+}
+export function moveFunds(fromId:string,toId:string,amount:number) {
+ const funds=loadFromStorage<DanaInsentif[]>(STORAGE_KEYS.dana,MOCK_DANA),source=funds.find(f=>f.id===fromId),target=funds.find(f=>f.id===toId);
+ if(!source||!target||fromId===toId||!Number.isFinite(amount)||amount<=0||amount>source.saldo)return false;
+ const logs=loadFromStorage<TransaksiDana[]>(STORAGE_KEYS.transaksiDana,[]);
+ commitCollections({[STORAGE_KEYS.dana]:funds.map(f=>f.id===fromId?{...f,saldo:f.saldo-amount}:f.id===toId?{...f,saldo:f.saldo+amount}:f),[STORAGE_KEYS.transaksiDana]:[{id:uid("dn"),sumberId:source.id,sumberNama:source.namaPemilik,tujuanId:target.id,tujuanNama:target.namaPemilik,jenis:"penyaluran",jumlah:amount,tanggal:new Date().toISOString()},...logs]});return true;
+}
+export function useWargaIdentity() {
+ return useSyncExternalStore((callback)=>{window.addEventListener("sajati_session_change",callback);window.addEventListener("storage",callback);return()=>{window.removeEventListener("sajati_session_change",callback);window.removeEventListener("storage",callback);};},()=>{try{return JSON.parse(localStorage.getItem("sajati_identity")??"{}").wargaId || "w1";}catch{return "w1";}},()=>"w1") as string;
 }

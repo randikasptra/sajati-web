@@ -34,12 +34,11 @@ import {
   STATUS_SETORAN_LABEL,
   STATUS_PENUKARAN_LABEL,
   type KategoriSampah,
-  type PenukaranItem,
 } from "@/data/mock";
-import { useSetoran, useWarga, usePenukaran, usePenjemputan, usePengaduan, useKatalog } from "@/lib/store";
+import { useSetoran, useWarga, usePenukaran, usePenjemputan, usePengaduan, useKatalog, useJadwal, useWargaIdentity, redeemGoods } from "@/lib/store";
 import { formatRupiah, formatBerat, formatTanggalPendek, generateId } from "@/lib/utils";
 
-const WARGA_ID = "w1";
+
 const CATEGORY_KEYS = Object.keys(HARGA_SAMPAH) as KategoriSampah[];
 
 function statusVariant(color: string): "default" | "secondary" | "destructive" | "outline" {
@@ -56,22 +55,15 @@ export function WargaPage({
   activeNav: string;
   onNavChange: (href: string) => void;
 }) {
-  const [wargaId, setWargaId] = useState(WARGA_ID);
-  const { wargaList } = useWarga();
+  const wargaId = useWargaIdentity();
   const tab = activeNav === "/riwayat" ? "riwayat" : activeNav === "/tukar" ? "tukar" : activeNav === "/setor" ? "setor" : activeNav === "/panduan" ? "panduan" : "beranda";
   return (
     <div className="space-y-4">
-    <label className="flex flex-col gap-1 text-xs text-muted-foreground sm:flex-row sm:items-center sm:gap-3">
-      <span>Akun warga demo</span>
-      <select value={wargaId} onChange={(event) => setWargaId(event.target.value)} className="h-9 w-full rounded-md border bg-background px-3 text-sm text-foreground sm:max-w-xs">
-        {wargaList.map((warga) => <option key={warga.id} value={warga.id}>{warga.nama} · {warga.desa}</option>)}
-      </select>
-    </label>
     <Tabs value={tab} onValueChange={(value) => onNavChange(value === "riwayat" ? "/riwayat" : value === "tukar" ? "/tukar" : value === "setor" ? "/setor" : value === "panduan" ? "/panduan" : "/")} className="space-y-4">
       <TabsList className="hidden md:inline-flex">
         <TabsTrigger value="beranda">Beranda</TabsTrigger>
         <TabsTrigger value="riwayat">Riwayat</TabsTrigger>
-        <TabsTrigger value="setor">Setor / Jemput</TabsTrigger>
+        <TabsTrigger value="setor">Setor Sampah</TabsTrigger>
         <TabsTrigger value="tukar">Tukar Barang</TabsTrigger>
         <TabsTrigger value="panduan">Panduan</TabsTrigger>
       </TabsList>
@@ -131,7 +123,7 @@ function WargaBeranda({ wargaId }: { wargaId: string }) {
           <CardContent className="px-3 pb-3 sm:px-4 sm:pb-4">
             <div className="text-xl font-bold sm:text-2xl">{formatRupiah(warga?.saldo ?? 0)}</div>
             <p className="mt-1 text-[10px] leading-tight text-muted-foreground sm:text-xs">
-              Saldo simulasi — dapat ditukarkan di Kopdes
+              Saldo manfaat — dapat ditukarkan di Kopdes
             </p>
           </CardContent>
         </Card>
@@ -346,7 +338,7 @@ function WargaRiwayat({ wargaId }: { wargaId: string }) {
                     return (
                       <TableRow key={p.id}>
                         <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
-                          {formatTanggalPendek(p.tanggal)}
+                          {formatTanggalPendek(p.tanggal)}<span className="block font-mono">Kode: {p.id.toUpperCase()}</span>
                         </TableCell>
                         <TableCell>
                           {p.items.map((i) => `${i.namaBarang} ×${i.jumlah}`).join(", ")}
@@ -378,6 +370,9 @@ function WargaLayanan({ wargaId }: { wargaId: string }) {
   const { pengaduan, addPengaduan } = usePengaduan();
   const [metode, setMetode] = useState<"antar" | "keliling">("antar");
   const [tanggal, setTanggal] = useState("");
+  const { jadwal } = useJadwal();
+  const { setoran } = useSetoran();
+  const availableSchedules = jadwal.filter(j=>j.status === "terbit" && j.tanggal >= new Date().toLocaleDateString("en-CA"));
   const [titikKeliling, setTitikKeliling] = useState("");
   const [kategori, setKategori] = useState<KategoriSampah[]>([]);
   const [subject, setSubject] = useState("");
@@ -388,12 +383,14 @@ function WargaLayanan({ wargaId }: { wargaId: string }) {
   const toggleCategory = (value: KategoriSampah) => setKategori((current) => current.includes(value) ? current.filter((item) => item !== value) : [...current, value]);
 
   const submitRequest = () => {
-    if (!tanggal || kategori.length === 0 || (metode === "keliling" && !titikKeliling)) {
+    const schedule = availableSchedules.find(j=>j.id===titikKeliling);
+    if ((metode === "antar" && (!tanggal || tanggal < new Date().toLocaleDateString("en-CA"))) || kategori.length === 0 || (metode === "keliling" && !schedule)) {
       setFeedback("Pilih jadwal setor dan jenis sampah. Untuk setor keliling, pilih rute yang tersedia.");
       return;
     }
-    const routeLabel = titikKeliling === "barat" ? "Rute Sukamanah Barat · Lapang Desa · 08.00–10.00" : "Rute Sukamanah Timur · Balai RW 05 · 10.30–12.00";
-    addPenjemputan({ id: generateId("jm"), wargaId, tanggalJemput: tanggal, metode, alamat: metode === "keliling" ? routeLabel : "Titik setor Desa Sukamanah", kategori, status: "diajukan", createdAt: new Date().toISOString() });
+    const routeLabel = schedule ? `${schedule.wilayah} ? ${schedule.titik} ? ${schedule.waktu}` : "Titik setor Desa Sukamanah";
+    if (wargaRequests.some(r => r.jadwalId === schedule?.id && schedule && r.status !== "dibatalkan")) { setFeedback("Kamu sudah terdaftar pada jadwal ini."); return; }
+    addPenjemputan({ id: generateId("jm"), wargaId, jadwalId: schedule?.id, tanggalJemput: metode === "keliling" ? schedule!.tanggal : tanggal, metode, alamat: routeLabel, kategori, status: metode === "keliling" ? "dijadwalkan" : "diajukan", createdAt: new Date().toISOString() });
     setKategori([]); setTanggal(""); setTitikKeliling("");
     setFeedback(metode === "keliling" ? "Kamu terdaftar pada jadwal setor keliling. Bawa sampah ke titik kumpul sesuai rute dan waktu." : "Jadwal setor tercatat. Petugas desa akan memverifikasi saat sampah diterima.");
   };
@@ -412,15 +409,15 @@ function WargaLayanan({ wargaId }: { wargaId: string }) {
       <Card><CardHeader><CardTitle>Ajukan setor sampah</CardTitle><CardDescription>Berat dan nilai final ditentukan petugas setelah penimbangan serta verifikasi di desa.</CardDescription></CardHeader><CardContent className="space-y-4">
         <div className="grid grid-cols-2 gap-2"><Button variant={metode === "antar" ? "default" : "outline"} onClick={() => setMetode("antar")}>Antar ke desa</Button><Button variant={metode === "keliling" ? "default" : "outline"} onClick={() => setMetode("keliling")}>Setor keliling</Button></div>
         <p className="text-xs leading-5 text-muted-foreground">{metode === "keliling" ? "Petugas berkeliling sesuai rute dan jadwal wilayah. Warga membawa sampah ke titik kumpul; tidak ada penjemputan ke rumah." : "Bawa sampah langsung ke titik setor desa pada tanggal yang dipilih."}</p>
-        <label className="block space-y-1 text-sm"><span>Tanggal setor</span><input type="date" min={new Date().toISOString().slice(0, 10)} value={tanggal} onChange={(event) => setTanggal(event.target.value)} className="h-9 w-full rounded-md border bg-background px-3" /></label>
-        {metode === "keliling" && <label className="block space-y-1 text-sm"><span>Pilih rute petugas keliling</span><select value={titikKeliling} onChange={(event) => setTitikKeliling(event.target.value)} className="h-10 w-full rounded-md border bg-background px-3"><option value="">Pilih wilayah dan titik kumpul</option><option value="barat">Sukamanah Barat · Lapang Desa · 08.00–10.00</option><option value="timur">Sukamanah Timur · Balai RW 05 · 10.30–12.00</option></select><span className="block text-xs text-muted-foreground">Jadwal contoh untuk demo; petugas melayani beberapa titik di wilayahnya.</span></label>}
+        {metode === "antar" && <label className="block space-y-1 text-sm"><span>Tanggal setor</span><input type="date" min={new Date().toLocaleDateString("en-CA")} value={tanggal} onChange={event=>setTanggal(event.target.value)} className="h-10 w-full rounded-md border bg-background px-3" /></label>}
+        {metode === "keliling" && <label className="block space-y-1 text-sm"><span>Jadwal petugas keliling</span><select value={titikKeliling} onChange={event=>setTitikKeliling(event.target.value)} className="h-10 w-full rounded-md border bg-background px-3"><option value="">Pilih jadwal tersedia</option>{availableSchedules.map(j=><option key={j.id} value={j.id}>{j.tanggal} - {j.wilayah} - {j.titik} - {j.waktu}</option>)}</select>{!availableSchedules.length && <p className="mt-2 text-sm text-muted-foreground">Belum ada jadwal terbit. Kamu tetap dapat mengantar ke desa.</p>}</label>}
         <fieldset className="space-y-2"><legend className="text-sm font-medium">Jenis sampah terpilah</legend><div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{CATEGORY_KEYS.map((value) => <label key={value} className="flex items-center gap-2 rounded-md border p-2 text-sm"><input type="checkbox" checked={kategori.includes(value)} onChange={() => toggleCategory(value)} />{HARGA_SAMPAH[value].label}</label>)}</div></fieldset>
         <Button onClick={submitRequest}><Truck className="size-4" />{metode === "keliling" ? "Daftar jadwal keliling" : "Catat jadwal setor"}</Button>
       </CardContent></Card>
-      <Card><CardHeader><CardTitle>Jadwal setor saya</CardTitle></CardHeader><CardContent className="space-y-2">{wargaRequests.length === 0 ? <p className="text-sm text-muted-foreground">Belum ada jadwal setor terdaftar.</p> : wargaRequests.map((item) => <div key={item.id} className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"><div className="text-sm"><p className="font-medium">{item.metode === "keliling" || (item.metode as string) === "jemput" ? "Setor keliling" : "Antar ke desa"} · {formatTanggalPendek(item.tanggalJemput)}</p><p className="text-muted-foreground">{item.alamat} · {item.kategori.map((type) => HARGA_SAMPAH[type].label).join(", ")}</p></div><Badge variant={item.status === "diajukan" ? "secondary" : "default"}>{item.status}</Badge></div>)}</CardContent></Card>
+      <Card><CardHeader><CardTitle>Jadwal setor saya</CardTitle></CardHeader><CardContent className="space-y-2">{wargaRequests.length === 0 ? <p className="text-sm text-muted-foreground">Belum ada jadwal setor terdaftar.</p> : wargaRequests.map((item) => <div key={item.id} className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"><div className="text-sm"><p className="font-medium">{item.metode === "keliling" || (item.metode as string) === "jemput" ? "Setor keliling" : "Antar ke desa"} · {formatTanggalPendek(item.tanggalJemput)}</p><p className="text-muted-foreground">{item.alamat} · {item.kategori.map((type) => HARGA_SAMPAH[type].label).join(", ")}</p></div><Badge variant={item.status === "diajukan" ? "secondary" : "default"}>{(() => { const deposit=setoran.find(s=>s.penjemputanId===item.id); return deposit ? STATUS_SETORAN_LABEL[deposit.status].label : item.status === "diterima" ? "Diterima ? menunggu timbang" : item.status === "dijadwalkan" ? "Terjadwal" : item.status === "selesai" ? "Sudah ditimbang" : item.status; })()}</Badge></div>)}</CardContent></Card>
     </div>
     <div className="space-y-4">
-      <Card><CardHeader><CardTitle>Pengaduan dan bantuan</CardTitle><CardDescription>Contoh kanal untuk masalah jadwal, pencatatan, atau penggunaan aplikasi.</CardDescription></CardHeader><CardContent className="space-y-3"><label className="block space-y-1 text-sm"><span>Subjek</span><input value={subject} onChange={(event) => setSubject(event.target.value)} className="h-9 w-full rounded-md border bg-background px-3" placeholder="Contoh: jadwal setor keliling" /></label><label className="block space-y-1 text-sm"><span>Pesan</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} rows={3} className="w-full rounded-md border bg-background p-3" placeholder="Jelaskan kebutuhan atau kendala" /></label><Button variant="outline" onClick={submitComplaint}><MessageCircle className="size-4" />Kirim pengaduan</Button></CardContent></Card>
+      <Card><CardHeader><CardTitle>Pengaduan dan bantuan</CardTitle><CardDescription>Sampaikan kendala jadwal, pencatatan, atau penggunaan aplikasi.</CardDescription></CardHeader><CardContent className="space-y-3"><label className="block space-y-1 text-sm"><span>Subjek</span><input value={subject} onChange={(event) => setSubject(event.target.value)} className="h-9 w-full rounded-md border bg-background px-3" placeholder="Contoh: jadwal setor keliling" /></label><label className="block space-y-1 text-sm"><span>Pesan</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} rows={3} className="w-full rounded-md border bg-background p-3" placeholder="Jelaskan kebutuhan atau kendala" /></label><Button variant="outline" onClick={submitComplaint}><MessageCircle className="size-4" />Kirim pengaduan</Button></CardContent></Card>
       <Card><CardHeader><CardTitle>Riwayat pengaduan</CardTitle></CardHeader><CardContent className="space-y-2">{wargaComplaints.length === 0 ? <p className="text-sm text-muted-foreground">Belum ada pengaduan.</p> : wargaComplaints.map((item) => <div key={item.id} className="rounded-lg border p-3 text-sm"><div className="flex justify-between gap-2"><strong>{item.subjek}</strong><Badge variant={item.status === "selesai" ? "default" : "secondary"}>{item.status}</Badge></div><p className="mt-1 text-muted-foreground">{item.pesan}</p></div>)}</CardContent></Card>
     </div>
     {feedback && <p role="status" className="rounded-md bg-primary/10 p-3 text-sm text-primary xl:col-span-2">{feedback}</p>}
@@ -428,19 +425,20 @@ function WargaLayanan({ wargaId }: { wargaId: string }) {
 }
 
 function WargaPanduan() {
-  return <div className="space-y-4"><div><h2 className="text-2xl font-bold">Panduan pemilahan</h2><p className="text-muted-foreground">Pisahkan sampah di rumah, jaga tetap kering dan bersih, lalu setorkan melalui titik desa atau titik kumpul rute keliling.</p></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{(Object.entries(HARGA_SAMPAH) as [KategoriSampah, (typeof HARGA_SAMPAH)[KategoriSampah]][]).map(([key, value]) => <Card key={key}><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-base"><span aria-hidden="true">{value.icon}</span>{value.label}</CardTitle><CardDescription>Nilai ilustrasi maksimal {formatRupiah(value.hargaPerKg)}/kg</CardDescription></CardHeader><CardContent className="text-sm text-muted-foreground">Nilai aktual mengikuti berat, kualitas, daftar harga yang ditetapkan pengelola, dan verifikasi petugas.</CardContent></Card>)}</div><Card><CardHeader><CardTitle>Alur setelah disetor</CardTitle></CardHeader><CardContent><ol className="list-inside list-decimal space-y-2 text-sm text-muted-foreground"><li>Petugas menimbang dan memeriksa jenis serta kualitas.</li><li>Pengelola desa mengesahkan nilai setoran setelah dana insentif tersedia.</li><li>Saldo dapat dipakai untuk menukar kebutuhan pokok di Kopdes.</li><li>Material yang tak tertampung di desa diteruskan ke kecamatan, BUMD, atau mitra yang sesuai.</li></ol></CardContent></Card></div>;
+  return <div className="space-y-4"><div><h2 className="text-2xl font-bold">Panduan pemilahan</h2><p className="text-muted-foreground">Pisahkan sampah di rumah, jaga tetap kering dan bersih, lalu setorkan melalui titik desa atau titik kumpul rute keliling.</p></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{(Object.entries(HARGA_SAMPAH) as [KategoriSampah, (typeof HARGA_SAMPAH)[KategoriSampah]][]).map(([key, value]) => <Card key={key}><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-base"><span aria-hidden="true">{value.icon}</span>{value.label}</CardTitle><CardDescription>Nilai acuan maksimal {formatRupiah(value.hargaPerKg)}/kg</CardDescription></CardHeader><CardContent className="text-sm text-muted-foreground">Nilai aktual mengikuti berat, kualitas, daftar harga yang ditetapkan pengelola, dan verifikasi petugas.</CardContent></Card>)}</div><Card><CardHeader><CardTitle>Alur setelah disetor</CardTitle></CardHeader><CardContent><ol className="list-inside list-decimal space-y-2 text-sm text-muted-foreground"><li>Petugas menimbang dan memeriksa jenis serta kualitas.</li><li>Pengelola desa mengesahkan nilai setoran setelah dana insentif tersedia.</li><li>Saldo dapat dipakai untuk menukar kebutuhan pokok di Kopdes.</li><li>Material yang tak tertampung di desa diteruskan ke kecamatan, BUMD, atau mitra yang sesuai.</li></ol></CardContent></Card></div>;
 }
 
 // ---------- Tukar Barang ----------
 function WargaTukar({ wargaId }: { wargaId: string }) {
   const { getWarga } = useWarga();
-  const { addPenukaran } = usePenukaran();
-  const { updateSaldo } = useWarga();
-  const { katalog, updateKatalog } = useKatalog();
+
+  const { katalog } = useKatalog();
   const warga = getWarga(wargaId);
 
   const [cart, setCart] = useState<Record<string, number>>({});
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [receipt,setReceipt]=useState("");
+  const [redeemError,setRedeemError]=useState("");
   const [successOpen, setSuccessOpen] = useState(false);
 
   const cartTotal = useMemo(() => {
@@ -454,34 +452,12 @@ function WargaTukar({ wargaId }: { wargaId: string }) {
   const handleSubmit = useCallback(() => {
     if (!warga || cartTotal > warga.saldo || Object.entries(cart).some(([id, qty]) => (katalog.find((item) => item.id === id)?.stok ?? 0) < qty)) return;
 
-    const items: PenukaranItem[] = Object.entries(cart)
-      .map(([barangId, qty]) => {
-        const barang = katalog.find((b) => b.id === barangId);
-        if (!barang) return null;
-        return {
-          barangId,
-          namaBarang: barang.nama,
-          jumlah: qty,
-          nilaiTukar: barang.nilaiTukar,
-          subtotal: barang.nilaiTukar * qty,
-        };
-      })
-      .filter(Boolean) as PenukaranItem[];
-
-    addPenukaran({
-      id: generateId("pn"),
-      wargaId,
-      tanggal: new Date().toISOString().slice(0, 10),
-      items,
-      totalNilai: cartTotal,
-      status: "menunggu",
-    });
-    updateSaldo(wargaId, -cartTotal);
-    updateKatalog(katalog.map((barang) => cart[barang.id] ? { ...barang, stok: barang.stok - cart[barang.id] } : barang));
+    try { const code=redeemGoods(wargaId,cart); setReceipt(code.toUpperCase()); }
+    catch(error) { setRedeemError((error as Error).message); return; }
     setCart({});
     setDialogOpen(false);
     setSuccessOpen(true);
-  }, [cart, cartTotal, wargaId, warga, katalog, addPenukaran, updateSaldo, updateKatalog]);
+  }, [cart, cartTotal, wargaId, warga, katalog]);
 
   const categories = [...new Set(katalog.map((b) => b.kategori))];
 
@@ -594,7 +570,7 @@ function WargaTukar({ wargaId }: { wargaId: string }) {
             <DialogTitle>Konfirmasi Penukaran</DialogTitle>
             <DialogDescription>
               Tukarkan saldo {formatRupiah(cartTotal)} untuk {cartCount} barang?
-              Ini adalah aksi simulasi pada prototype.
+              Pastikan barang dan jumlah penukaran sudah sesuai.
             </DialogDescription>
           </DialogHeader>
           <Separator />
@@ -621,12 +597,14 @@ function WargaTukar({ wargaId }: { wargaId: string }) {
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
               Batal
             </Button>
-            <Button onClick={handleSubmit}>Ya, tukarkan (simulasi)</Button>
+            <Button onClick={handleSubmit}>Konfirmasi penukaran</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* Success dialog */}
+      {redeemError && <p role="alert">{redeemError}</p>}
+      <p className="break-all text-sm">{receipt && `Kode pengambilan: ${receipt}`}</p>
       <Dialog open={successOpen} onOpenChange={setSuccessOpen}>
         <DialogContent>
           <DialogHeader>

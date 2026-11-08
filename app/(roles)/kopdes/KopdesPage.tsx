@@ -180,7 +180,7 @@ function KopdesPermintaan() {
                   <TableRow key={p.id}>
                     <TableCell className="font-medium">{warga?.nama ?? "-"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                      {formatTanggalPendek(p.tanggal)}
+                      {formatTanggalPendek(p.tanggal)}<span className="block break-all font-mono text-xs">Kode: {p.id.toUpperCase()}</span>
                     </TableCell>
                     <TableCell>
                       {p.items.map((i) => `${i.namaBarang} ×${i.jumlah}`).join(", ")}
@@ -369,7 +369,7 @@ function KopdesRiwayat() {
                 <TableRow key={p.id}>
                   <TableCell className="font-medium">{warga?.nama ?? "-"}</TableCell>
                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                    {formatTanggalPendek(p.tanggal)}
+                    {formatTanggalPendek(p.tanggal)}<span className="block break-all font-mono text-xs">Kode: {p.id.toUpperCase()}</span>
                   </TableCell>
                   <TableCell>{p.items.map((i) => `${i.namaBarang} ×${i.jumlah}`).join(", ")}</TableCell>
                   <TableCell className="text-right tabular-nums font-medium">

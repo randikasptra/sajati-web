@@ -27,10 +27,11 @@ export type StatusPenukaran =
   | "selesai";
 
 export type JenjangPemilik = "desa" | "kecamatan" | "kabupaten";
-export type StatusTransfer = "menunggu" | "diterima" | "ditolak";
+export type StatusTransfer = "menunggu" | "dikirim" | "diterima" | "ditolak";
 export type StatusListing = "aktif" | "dipesan" | "terjual" | "ditutup";
 
 export interface Penjemputan {
+  jadwalId?: string;
   id: string;
   wargaId: string;
   tanggalJemput: string;
@@ -43,6 +44,8 @@ export interface Penjemputan {
 }
 
 export interface StokMaterial {
+  setoranId?: string;
+  terkunci?: boolean;
   id: string;
   jenjang: JenjangPemilik;
   pemilikId: string;
@@ -50,11 +53,16 @@ export interface StokMaterial {
   kategori: KategoriSampah;
   beratKg: number;
   kualitas: "baik" | "sedang" | "kurang";
-  klasifikasi?: "belum_dipilah" | "dikelola" | "tidak_dikelola";
+  klasifikasi?: "belum_dipilah" | "dikelola" | "tidak_dikelola" | "residu";
   diperbaruiPada: string;
 }
 
 export interface TransferMaterial {
+  stokAsalId?: string;
+  klasifikasi?: StokMaterial["klasifikasi"];
+  beratDiterima?: number;
+  alasanSelisih?: string;
+  alasanTolak?: string;
   id: string;
   asalJenjang: JenjangPemilik;
   asalId: string;
@@ -73,6 +81,8 @@ export interface TransferMaterial {
 }
 
 export interface ListingMaterial {
+  pembayaran?: "belum_dibayar" | "lunas";
+  dibayarPada?: string;
   id: string;
   pemilikJenjang: JenjangPemilik;
   pemilikId: string;
@@ -112,7 +122,7 @@ export interface TransaksiDana {
   sumberNama: string;
   tujuanId?: string;
   tujuanNama: string;
-  jenis: "penyaluran" | "insentif_warga";
+  jenis: "penyaluran" | "insentif_warga" | "penjualan";
   jumlah: number;
   referensi?: string;
   tanggal: string;
@@ -139,6 +149,7 @@ export interface Warga {
 }
 
 export interface Setoran {
+  stokTercatat?: boolean;
   id: string;
   wargaId: string;
   penjemputanId?: string;

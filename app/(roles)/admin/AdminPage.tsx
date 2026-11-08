@@ -29,8 +29,8 @@ import {
   type Setoran,
 } from "@/data/mock";
 import { useSetoran, useWarga, usePenukaran } from "@/lib/store";
-import { formatRupiah, formatBerat, formatTanggalPendek, generateId } from "@/lib/utils";
-import { useDana, useStok, usePengaduan } from "@/lib/store";
+import { formatRupiah, formatBerat, formatTanggalPendek } from "@/lib/utils";
+import { usePengaduan, approveDeposit } from "@/lib/store";
 
 function statusVariant(color: string): "default" | "secondary" | "destructive" | "outline" {
   if (color === "green") return "default";
@@ -98,7 +98,7 @@ export function AdminPage({
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold tabular-nums">{formatRupiah(totalSaldoDisalurkan)}</div>
-            <p className="text-xs text-muted-foreground">simulasi</p>
+            <p className="text-xs text-muted-foreground">Saldo manfaat</p>
           </CardContent>
         </Card>
         <Card>
@@ -141,44 +141,14 @@ export function AdminPage({
 
 // ---------- Persetujuan ----------
 function AdminPersetujuan({ perluPersetujuan }: { perluPersetujuan: Setoran[] }) {
-  const { updateSetoranById } = useSetoran();
-  const { wargaList, updateSaldo } = useWarga();
-  const { deductDana } = useDana();
-  const { stok, updateStok } = useStok();
+  const { wargaList } = useWarga();
   const [confirmDialog, setConfirmDialog] = useState<Setoran | null>(null);
   const [successDialog, setSuccessDialog] = useState<{ nama: string; nilai: number } | null>(null);
   const [fundingError, setFundingError] = useState("");
 
   const handleApprove = (s: Setoran) => {
-    if (s.status !== "terverifikasi") return;
-    const villageStock = stok.filter((row) => row.jenjang === "desa" && row.pemilikId === "desa-sukamanah").reduce((sum, row) => sum + row.beratKg, 0);
-    const incomingWeight = s.items.reduce((sum, item) => sum + item.berat, 0);
-    if (villageStock + incomingWeight > 300) {
-      setFundingError("Kapasitas penampungan desa 300 kg akan terlampaui. Salurkan stok ke kecamatan sebelum setoran disetujui.");
-      return;
-    }
-    const warga = wargaList.find((w) => w.id === s.wargaId);
-    if (!deductDana("dana-desa", s.totalNilai, `Insentif ${warga?.nama ?? "Warga"}`, s.id)) {
-      setFundingError("Dana insentif desa tidak mencukupi. Ajukan penyaluran dana melalui pengelola kecamatan.");
-      return;
-    }
-    updateSetoranById(s.id, { status: "saldo_ditambahkan", adminId: "a1" });
-    updateSaldo(s.wargaId, s.totalNilai);
-    const now = new Date().toISOString();
-    updateStok([
-      ...stok,
-      ...s.items.map((item) => ({
-        id: generateId("st"),
-        jenjang: "desa" as const,
-        pemilikId: "desa-sukamanah",
-        namaPemilik: "Desa Sukamanah",
-        kategori: item.kategori,
-        beratKg: item.berat,
-        kualitas: item.kualitas,
-        klasifikasi: "belum_dipilah" as const,
-        diperbaruiPada: now,
-      })),
-    ]);
+    const warga = wargaList.find(w => w.id === s.wargaId);
+    try { approveDeposit(s.id); } catch(error) { setFundingError((error as Error).message); return; }
     setConfirmDialog(null);
     setFundingError("");
     setSuccessDialog({ nama: warga?.nama ?? "Warga", nilai: s.totalNilai });
@@ -269,7 +239,7 @@ function AdminPersetujuan({ perluPersetujuan }: { perluPersetujuan: Setoran[] })
             <DialogDescription>
               Tambahkan saldo {confirmDialog ? formatRupiah(confirmDialog.totalNilai) : ""} ke akun{" "}
               {wargaList.find((w) => w.id === confirmDialog?.wargaId)?.nama ?? "warga"}?
-              Ini adalah aksi simulasi pada prototype.
+              Pastikan barang dan jumlah penukaran sudah sesuai.
             </DialogDescription>
             {fundingError && <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{fundingError}</p>}
           </DialogHeader>
@@ -291,7 +261,7 @@ function AdminPersetujuan({ perluPersetujuan }: { perluPersetujuan: Setoran[] })
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDialog(null)}>Batal</Button>
             <Button onClick={() => confirmDialog && handleApprove(confirmDialog)}>
-              Ya, setujui (simulasi)
+              Konfirmasi pengesahan
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -306,7 +276,7 @@ function AdminPersetujuan({ perluPersetujuan }: { perluPersetujuan: Setoran[] })
               Saldo Berhasil Ditambahkan
             </DialogTitle>
             <DialogDescription>
-              {successDialog?.nama} menerima saldo {successDialog ? formatRupiah(successDialog.nilai) : ""} (simulasi).
+              {successDialog?.nama} menerima saldo {successDialog ? formatRupiah(successDialog.nilai) : ""}.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -334,7 +304,7 @@ function AdminSaldoWarga() {
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Saldo Manfaat Warga</CardTitle>
-        <CardDescription>Data ilustrasi — saldo simulasi seluruh warga</CardDescription>
+        <CardDescription>Ringkasan saldo manfaat warga</CardDescription>
       </CardHeader>
       <CardContent>
         <Table>

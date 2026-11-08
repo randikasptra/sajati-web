@@ -15,9 +15,14 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
+  icons: {
+    icon: "/favicon.ico?v=sajati",
+    shortcut: "/favicon.ico?v=sajati",
+    apple: "/img/SAJATI_Logo.png",
+  },
   title: "SAJATI — Sistem Jejaring Sampah Bernilai dan Terintegrasi",
   description:
-    "Prototype pengalaman pengguna sistem pengelolaan sampah bernilai untuk Kabupaten Tasikmalaya. Data ilustrasi — bukan layanan publik.",
+    "Prototype pengalaman pengguna sistem pengelolaan sampah bernilai untuk Kabupaten Tasikmalaya. Jejaring pengelolaan sampah terintegrasi.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

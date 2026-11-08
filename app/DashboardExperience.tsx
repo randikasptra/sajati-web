@@ -1,7 +1,7 @@
-﻿"use client";
+"use client";
 
 import { useRouter, usePathname } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
 import { AppShell } from "@/app/components/layout/AppShell";
 import { WargaPage } from "@/app/(roles)/warga/WargaPage";
 import { PetugasPage } from "@/app/(roles)/petugas/PetugasPage";
@@ -38,10 +38,16 @@ const NAV_ITEMS: Record<ActiveRole, NavItem[]> = {
     { label: "Dasbor", href: "/", icon: Home }, { label: "Permintaan", href: "/permintaan", icon: ShoppingBag },
     { label: "Katalog", href: "/katalog", icon: Store }, { label: "Riwayat", href: "/riwayat", icon: FileCheck },
   ],
-  kecamatan: [{ label: "Dashboard Kecamatan", href: "/", icon: Building2 }],
-  bumd: [{ label: "Dashboard BUMD", href: "/", icon: Factory }],
-  mitra: [{ label: "Marketplace & Pengolahan", href: "/", icon: Handshake }],
-  kabupaten: [{ label: "Dashboard Kabupaten", href: "/", icon: ChartNoAxesCombined }],
+  kecamatan: [
+    {label:"Dasbor",href:"/kecamatan",icon:Building2},{label:"Stok & Pilah",href:"/kecamatan/stok",icon:Package},
+    {label:"Transfer",href:"/kecamatan/transfer",icon:Truck},{label:"Dana",href:"/kecamatan/dana",icon:Wallet},
+    {label:"Wilayah",href:"/kecamatan/wilayah",icon:ChartNoAxesCombined}],
+  bumd: [{label:"Dasbor",href:"/bumd",icon:Factory},{label:"Stok & Pilah",href:"/bumd/stok",icon:Package},
+    {label:"Penerimaan",href:"/bumd/transfer",icon:Truck},{label:"Dana",href:"/bumd/dana",icon:Wallet},
+    {label:"Penjualan",href:"/bumd/marketplace",icon:Store}],
+  mitra: [{label:"Marketplace & Pengolahan",href:"/mitra",icon:Handshake}],
+  kabupaten: [{label:"Dasbor",href:"/kabupaten",icon:Home},{label:"Wilayah",href:"/kabupaten/wilayah",icon:Building2},
+    {label:"Laporan",href:"/kabupaten/laporan",icon:ChartNoAxesCombined}],
 };
 
 function getSession(): ActiveRole | null {
@@ -69,40 +75,52 @@ function DashboardRoute() {
   const router = useRouter();
   const pathname = usePathname();
   const hydrated = useHydrated();
-  const { role, setRole } = useActiveRole();
+  const { setRole } = useActiveRole();
   const sessionRole = useSyncExternalStore(subscribeSession, getSession, () => null);
-  const navItems = NAV_ITEMS[role];
-  const activeNav = pathname === "/" ? navItems[0].href : pathname;
+  const role = sessionRole ?? "warga";
+  const roleItems = NAV_ITEMS[role];
+  const navItems = roleItems.map((item, index) => ({ ...item, href: index === 0 ? "/dashboard" : `/dashboard${item.href}` }));
+  const featurePath = pathname.replace(/^\/dashboard/, "") || roleItems[0].href;
+  const isRoleHome = featurePath === roleItems[0].href;
+  const activeNav = isRoleHome ? "/dashboard" : pathname;
+  const allowed = roleItems.some(item => item.href === featurePath);
+
+  useEffect(() => {
+    if (hydrated && !sessionRole) router.replace("/login");
+    else if (hydrated && (!allowed || (isRoleHome && pathname !== "/dashboard"))) router.replace("/dashboard");
+  }, [hydrated, sessionRole, allowed, isRoleHome, pathname, router]);
 
   if (!hydrated) return <div className="min-h-screen bg-[#e9edd9]" aria-label="Memuat SAJATI" />;
-  if (!sessionRole) return <div className="min-h-screen bg-[#e9edd9] p-8 text-center text-[#31583d]">Silakan masuk melalui halaman login untuk membuka fitur ini.</div>;
+  if (!sessionRole || !allowed) return <div className="min-h-screen bg-[#e9edd9] p-8 text-center text-[#31583d]">Mengalihkan halaman...</div>;
 
   function changeRole(nextRole: ActiveRole) {
+    localStorage.setItem("sajati_identity",JSON.stringify({role:nextRole,wargaId:nextRole === "warga" ? "w1" : null}));
     setRole(nextRole);
     localStorage.setItem("sajati_demo_session", nextRole);
     window.dispatchEvent(new Event("sajati_session_change"));
-    router.push(NAV_ITEMS[nextRole][0].href);
+    router.push("/dashboard");
   }
 
-  function changePage(href: string) { router.push(href); }
+  function changePage(href: string) { router.push(href === roleItems[0].href ? "/dashboard" : `/dashboard${href}`); }
 
   return (
     <AppShell
       activeRole={role}
       onLogout={() => {
         localStorage.removeItem("sajati_demo_session");
+        localStorage.removeItem("sajati_identity");
         window.dispatchEvent(new Event("sajati_session_change"));
-        router.push("/");
+        router.replace("/login");
       }}
       onRoleChange={changeRole}
       navItems={navItems}
       activeNav={activeNav}
     >
-      {role === "warga" && <WargaPage activeNav={activeNav} onNavChange={changePage} />}
-      {role === "petugas" && <PetugasPage activeNav={activeNav} onNavChange={changePage} />}
-      {role === "admin" && <AdminPage activeNav={activeNav} onNavChange={changePage} />}
-      {role === "kopdes" && <KopdesPage activeNav={activeNav} onNavChange={changePage} />}
-      {(role === "kecamatan" || role === "bumd" || role === "mitra" || role === "kabupaten") && <NetworkPage role={role} />}
+      {role === "warga" && <WargaPage activeNav={featurePath} onNavChange={changePage} />}
+      {role === "petugas" && <PetugasPage activeNav={featurePath} onNavChange={changePage} />}
+      {role === "admin" && <AdminPage activeNav={featurePath} onNavChange={changePage} />}
+      {role === "kopdes" && <KopdesPage activeNav={featurePath} onNavChange={changePage} />}
+      {(role === "kecamatan" || role === "bumd" || role === "mitra" || role === "kabupaten") && <NetworkPage role={role} activeNav={featurePath} />}
     </AppShell>
   );
 }
